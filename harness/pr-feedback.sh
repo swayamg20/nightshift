@@ -9,6 +9,10 @@
 # working branch), and NIGHTSHIFT_BASE (the default branch the PR targets).
 set -euo pipefail
 
+# gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+# success, so a capture with a fallback never mistakes an error for data.
+gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
+
 usage() {
 	echo "usage: pr-feedback.sh count|report" >&2
 	exit 2

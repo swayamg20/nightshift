@@ -96,6 +96,9 @@ jobs:
           STATUS: ${{ steps.harness.outputs.status }}
           NIGHTSHIFT_BRANCH: ${{ steps.harness.outputs.branch }}
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           status="$STATUS"
           # A scheduled run has nothing to do while a question waits on the owner, and its
           # memory-only commit would move the PR past the report the owner is reading.
@@ -217,6 +220,9 @@ jobs:
           GIT_NAME: ${{ steps.harness.outputs.identity-name }}
           GIT_EMAIL: ${{ steps.harness.outputs.identity-email }}
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           git config user.name "$GIT_NAME"
           git config user.email "$GIT_EMAIL"
           # The checkout keeps no credentials, and a private repository needs them. The
@@ -274,6 +280,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
           NIGHTSHIFT_BRANCH: ${{ steps.harness.outputs.branch }}
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           out="$RUNNER_TEMP/nightshift"
           # The agent cannot call GitHub, so give it a read-only snapshot of the open
           # issues the owner wrote. Issues from anyone else are left out.
@@ -446,6 +455,9 @@ jobs:
         id: publish
         if: env.HAS_BUNDLE == 'true'
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           out="$RUNNER_TEMP/nightshift"
           mkdir -p "$out" "$RUNNER_TEMP/publish"
           notes="$RUNNER_TEMP/publish/notes.md"
@@ -536,6 +548,9 @@ jobs:
         id: pr
         if: steps.publish.outputs.published == 'true'
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           out="$RUNNER_TEMP/nightshift"
           notes="$RUNNER_TEMP/publish/notes.md"
           # The agent describes the whole branch in pr.md: a title line, then the body.
@@ -613,6 +628,9 @@ jobs:
           PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
           PR_OUTCOME: ${{ steps.pr.outcome }}
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           gh label create "$NEEDS_YOU_LABEL" --color B60205 --description "Nightshift is waiting on the owner" --force || true
           gh label create nightshift --color 5319E7 --description "Nightshift runs" --force || true
           out="$RUNNER_TEMP/nightshift"

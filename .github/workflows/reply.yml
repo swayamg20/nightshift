@@ -40,6 +40,9 @@ jobs:
           AGENT_WORKFLOW: ${{ inputs.agent-workflow }}
           NIGHTSHIFT_BASE: ${{ github.event.repository.default_branch }}
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           gh workflow run "$AGENT_WORKFLOW" --ref "$NIGHTSHIFT_BASE"
           # A thumbs-up on the owner's comment shows the reply was picked up.
           gh api -X POST "repos/$GH_REPO/issues/comments/$COMMENT_ID/reactions" -f content='+1' >/dev/null \

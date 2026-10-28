@@ -100,6 +100,9 @@ jobs:
           THREAD: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           gh api -X POST "repos/$GH_REPO/issues/comments/$COMMENT_ID/reactions" -f content=confused >/dev/null || true
           gh api "repos/$GH_REPO/issues/$THREAD/comments" \
             -f body="@$OWNER I did not treat that as a merge command, so nothing was merged. To merge, reply to the run report with \`merge\` (or \`merge it\`) on the first line." >/dev/null
@@ -138,6 +141,9 @@ jobs:
       # merged or a confused face when not (the reply comment explains why).
       - name: Acknowledge the command
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           gh api -X POST "repos/$GH_REPO/issues/comments/$COMMENT_ID/reactions" -f content='+1' >/dev/null \
             || echo "::warning::Could not react to the comment"
 
@@ -166,6 +172,9 @@ jobs:
           DISPATCH_ON_MAIN: ${{ steps.config.outputs.dispatch-on-main }}
           CI_APPROVAL: ${{ steps.config.outputs.ci-approval }}
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           api="repos/$GH_REPO"
           own_head="" bound_head="" head=""
           neutralize() { sed -E 's/[Hh][Ee][Aa][Dd][[:space:]]*[Cc][Oo][Mm][Mm][Ii][Tt]/head-commit/g'; }
@@ -516,6 +525,9 @@ jobs:
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+          # success, so a capture with a fallback never mistakes an error for data.
+          gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           message="$(cat "$RUNNER_TEMP/message.md" 2>/dev/null || true)"
           [[ -n "$message" ]] || message="The merge attempt ended without a result; see the run."
           gh api "repos/$GH_REPO/issues/$THREAD/comments" \

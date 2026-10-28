@@ -23,6 +23,10 @@
 # It reaches `gh secret set` on stdin only, never as a command-line argument.
 set -euo pipefail
 
+# gh prints an API error's JSON body on stdout, even with --jq. Keep stdout only on
+# success, so a capture with a fallback never mistakes an error for data.
+gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
+
 secret_name=NIGHTSHIFT_MODEL_API_KEY
 cfg=.nightshift/config.yml
 base_url="" model="" name="" email="" repo=""
