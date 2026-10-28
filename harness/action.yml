@@ -1,0 +1,339 @@
+name: Nightshift harness
+description: >-
+  Resolves the Nightshift configuration and installs the harness root-owned, so the
+  agent cannot change its own script, instructions, goals, or configuration. Run it on
+  a checkout of the default branch, before root is dropped and before any branch
+  content is checked out.
+
+inputs:
+  config-path:
+    description: Nightshift configuration, relative to the default-branch checkout.
+    required: false
+    default: .nightshift/config.yml
+  goals-path:
+    description: Owner-controlled goals file, relative to the default-branch checkout.
+    required: false
+    default: .nightshift/GOALS.md
+  dest:
+    description: Absolute directory the harness is installed into, owned by root.
+    required: false
+    default: /opt/nightshift-harness
+
+outputs:
+  base-url:
+    description: agent.base_url, the OpenAI-compatible Responses API base the key proxy forwards to.
+    value: ${{ steps.resolve.outputs.base-url }}
+  model:
+    description: agent.model, the primary model or deployment.
+    value: ${{ steps.resolve.outputs.model }}
+  fallback-model:
+    description: agent.fallback_model, empty when there is none.
+    value: ${{ steps.resolve.outputs.fallback-model }}
+  minutes:
+    description: agent.minutes, the agent time budget per run.
+    value: ${{ steps.resolve.outputs.minutes }}
+  max-sessions:
+    description: agent.max_sessions.
+    value: ${{ steps.resolve.outputs.max-sessions }}
+  branch:
+    description: The working branch; never the default branch.
+    value: ${{ steps.resolve.outputs.branch }}
+  identity-name:
+    description: identity.name, the author and committer of published commits.
+    value: ${{ steps.resolve.outputs.identity-name }}
+  identity-email:
+    description: identity.email, the author and committer email of published commits.
+    value: ${{ steps.resolve.outputs.identity-email }}
+  node:
+    description: setup.node, the Node.js version (always installed; Codex needs it).
+    value: ${{ steps.resolve.outputs.node }}
+  python:
+    description: setup.python, empty when Python is not set up.
+    value: ${{ steps.resolve.outputs.python }}
+  go:
+    description: setup.go, empty when Go is not set up.
+    value: ${{ steps.resolve.outputs.go }}
+  pnpm:
+    description: setup.pnpm, true or false.
+    value: ${{ steps.resolve.outputs.pnpm }}
+  ci-workflow:
+    description: merge.ci_workflow, the path of the PR CI workflow whose runs are approved and awaited.
+    value: ${{ steps.resolve.outputs.ci-workflow }}
+  dispatch-on-main:
+    description: merge.dispatch_on_main as a JSON array of workflow file names.
+    value: ${{ steps.resolve.outputs.dispatch-on-main }}
+  ci-approval:
+    description: >-
+      `allowed` when the PR CI may be approved automatically for agent-written code,
+      otherwise `denied: <reason>`. Decided from the default branch, before any branch
+      content exists.
+    value: ${{ steps.resolve.outputs.ci-approval }}
+  status:
+    description: The value of the first `status:` line in the goals file (running or paused).
+    value: ${{ steps.resolve.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - name: Find or install yq
+      id: yq
+      shell: bash
+      env:
+        # Used only when the runner has no mikefarah yq v4. The checksums are the
+        # release's SHA-256 values for these Linux binaries.
+        YQ_VERSION: v4.54.1
+        YQ_SHA256_AMD64: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
+        YQ_SHA256_ARM64: 189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b
+        YQ_INSTALL_DIR: /usr/local/bin
+      run: |
+        # GitHub-hosted runners ship mikefarah yq v4. The Python yq of the same name has a
+        # different syntax, so it never counts.
+        if command -v yq >/dev/null && yq --version 2>/dev/null | grep -q 'mikefarah.* v4\.'; then
+          echo "path=$(command -v yq)" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [[ "$RUNNER_OS" != Linux ]]; then
+          echo "::error::Nightshift needs mikefarah yq v4, which it can only install by itself on Linux runners."
+          exit 1
+        fi
+        case "$(uname -m)" in
+          x86_64) arch=amd64 sum="$YQ_SHA256_AMD64" ;;
+          aarch64 | arm64) arch=arm64 sum="$YQ_SHA256_ARM64" ;;
+          *) echo "::error::There is no pinned yq build for $(uname -m)."; exit 1 ;;
+        esac
+        tmp="$(mktemp)"
+        trap 'rm -f "$tmp"' EXIT
+        curl -fsSL --retry 3 -o "$tmp" "https://github.com/mikefarah/yq/releases/download/$YQ_VERSION/yq_linux_$arch"
+        if ! echo "$sum  $tmp" | sha256sum -c --quiet -; then
+          echo "::error::The downloaded yq does not match its pinned checksum."
+          exit 1
+        fi
+        # Never shadow a different yq that later steps may rely on.
+        name=yq
+        if command -v yq >/dev/null; then name=nightshift-yq; fi
+        sudo install -o root -g root -m 755 "$tmp" "$YQ_INSTALL_DIR/$name"
+        "$YQ_INSTALL_DIR/$name" --version
+        echo "path=$YQ_INSTALL_DIR/$name" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve the configuration and install the harness
+      id: resolve
+      shell: bash
+      env:
+        YQ: ${{ steps.yq.outputs.path }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+        GOALS_PATH: ${{ inputs.goals-path }}
+        DEST: ${{ inputs.dest }}
+        # A scheduled run's event has no repository object, but it always runs on the
+        # default branch, so there the ref names it.
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch || (github.event_name == 'schedule' && github.ref_name) || '' }}
+        OWNER: ${{ github.repository_owner }}
+        OWNER_ID: ${{ github.repository_owner_id }}
+      run: |
+        fail() {
+          echo "::error::$*"
+          exit 1
+        }
+        [[ "$DEST" =~ ^/[A-Za-z0-9._/-]+$ && "$DEST" != *..* ]] || fail "dest must be an absolute path: $DEST"
+        [[ -n "$DEFAULT_BRANCH" ]] || fail "Could not determine the repository's default branch."
+        [[ -f "$GOALS_PATH" ]] || fail "$GOALS_PATH is missing on the default branch; Nightshift has no goal to work toward."
+        sudo -n true 2>/dev/null || fail "Installing the harness needs sudo; run this action before root is dropped."
+
+        # Read from the default-branch checkout only. Numbers become strings first, so
+        # versions keep their spelling (3.10 stays 3.10) and whole numbers are parsed in
+        # one place below.
+        if [[ -f "$CONFIG_PATH" ]]; then
+          docs="$("$YQ" -o=json -I=0 'explode(.) | (.. | select(tag == "!!int" or tag == "!!float")) tag = "!!str"' "$CONFIG_PATH" | jq -cs .)" \
+            || fail "$CONFIG_PATH is not valid YAML."
+        else
+          echo "::notice::$CONFIG_PATH is not on the default branch; using the defaults."
+          docs='[{}]'
+        fi
+
+        # Every omitted or null key takes its default. Only known keys are kept, and each
+        # value must have its default's type.
+        # shellcheck disable=SC2016 # jq variables, not shell expansions.
+        result="$(jq -c --arg owner "$OWNER" --arg owner_id "$OWNER_ID" '
+          def defaults: {
+            agent: {base_url: "", model: "gpt-6.1-sol", fallback_model: "", minutes: 220, max_sessions: 8, instructions: ""},
+            identity: {
+              name: $owner,
+              email: (if $owner_id == "" then "" else "\($owner_id)+\($owner)@users.noreply.github.com" end)
+            },
+            branch: "nightshift",
+            setup: {node: "22", python: "", go: "", pnpm: false, root: "", install: ""},
+            checks: [],
+            merge: {
+              ci_workflow: ".github/workflows/ci.yml",
+              approve_ci: "auto",
+              required_checks: [],
+              dispatch_on_main: ["ci.yml"],
+              allow: ["src/*", "*/src/*", "test/*", "tests/*", "*/test/*", "*/tests/*", "docs/*", "*.md"],
+              deny: [".github/*", "*/.github/*", ".nightshift/*", "AGENTS.md", "*/AGENTS.md", "CLAUDE.md", "*/CLAUDE.md"]
+            }
+          };
+          def resolve($d; $v; $p):
+            ($p | join(".")) as $name
+            | if $v == null then $d
+              elif ($d | type) == "object" then
+                if ($v | type) != "object" then error("\($name) must be a mapping.")
+                else reduce ($d | keys_unsorted[]) as $k ({}; .[$k] = resolve($d[$k]; $v[$k]; $p + [$k])) end
+              elif ($d | type) == "array" then
+                # One entry per line in the harness files, so entries cannot span lines.
+                if ($v | type) != "array" or any($v[]; type != "string" or . == "" or test("[\r\n]"))
+                then error("\($name) must be a list of non-empty, single-line strings.")
+                else $v end
+              elif ($d | type) == "boolean" then
+                if ($v | type) == "boolean" then $v else error("\($name) must be true or false.") end
+              elif ($d | type) == "number" then
+                if ($v | type) == "string" and ($v | test("\\A[0-9]{1,6}\\z")) then $v | tonumber
+                else error("\($name) must be a whole number.") end
+              elif ($v | type) == "string" then $v
+              else error("\($name) must be a string.") end;
+          # Keys the defaults do not know, so a typo is reported instead of silently ignored.
+          def unknown($d; $v; $p):
+            if ($d | type) == "object" and ($v | type) == "object" then
+              $v | keys_unsorted[] as $k
+              | if $d | has($k) then unknown($d[$k]; $v[$k]; $p + [$k])
+                else $p + [$k] | join(".") | gsub("[^A-Za-z0-9_.-]"; "?") end
+            else empty end;
+          if length != 1 then {error: "must hold exactly one YAML document."}
+          else (if .[0] == null then {} else .[0] end) as $c
+            | if ($c | type) != "object" then {error: "must be a YAML mapping."}
+              else try {config: resolve(defaults; $c; []), unknown: [unknown(defaults; $c; [])]} catch {error: .}
+              end
+          end' <<<"$docs")"
+        error="$(jq -r '.error // empty' <<<"$result")"
+        [[ -z "$error" ]] || fail "$CONFIG_PATH: $error"
+        jq -r --arg file "$CONFIG_PATH" '.unknown[] | "::warning::\($file): unknown key \(.) is ignored."' <<<"$result"
+        cfg="$(jq -c .config <<<"$result")"
+        get() { jq -r "$1" <<<"$cfg"; }
+
+        base_url="$(get .agent.base_url)"
+        model="$(get .agent.model)"
+        fallback="$(get .agent.fallback_model)"
+        minutes="$(get .agent.minutes)"
+        max_sessions="$(get .agent.max_sessions)"
+        branch="$(get .branch)"
+        git_name="$(get .identity.name)"
+        git_email="$(get .identity.email)"
+        node="$(get .setup.node)"
+        python="$(get .setup.python)"
+        go="$(get .setup.go)"
+        pnpm="$(get .setup.pnpm)"
+        ci_workflow="$(get .merge.ci_workflow)"
+        approve_ci="$(get .merge.approve_ci)"
+
+        # Every value below becomes a step output or reaches a command line, so each one
+        # is held to a narrow format; none can contain a newline.
+        url_re='^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~%-]*)*$'
+        model_re='^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$'
+        version_re='^[A-Za-z0-9.*/+_<>=~^-]+$'
+        branch_re='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+        name_re=$'^[^<>"`$\\\n\r]{1,100}$'
+        email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$'
+        workflow_re='^[A-Za-z0-9._-]+\.ya?ml$'
+        problems=()
+        if [[ -z "$base_url" ]]; then
+          problems+=("agent.base_url is required: the OpenAI-compatible Responses API base URL, for example https://example.openai.azure.com/openai/v1.")
+        elif ! [[ "$base_url" =~ $url_re ]]; then
+          problems+=("agent.base_url must be an https:// URL with no query string.")
+        fi
+        [[ "$model" =~ $model_re ]] || problems+=("agent.model must be a model or deployment name.")
+        [[ -z "$fallback" || "$fallback" =~ $model_re ]] || problems+=("agent.fallback_model must be a model or deployment name, or empty.")
+        ((minutes >= 15 && minutes <= 300)) || problems+=("agent.minutes must be between 15 and 300.")
+        ((max_sessions >= 1 && max_sessions <= 50)) || problems+=("agent.max_sessions must be between 1 and 50.")
+        if ! [[ "$branch" =~ $branch_re ]] || ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+          problems+=("branch must be a valid branch name.")
+        elif [[ "$branch" == "$DEFAULT_BRANCH" ]]; then
+          problems+=("branch must not be the default branch ($DEFAULT_BRANCH); Nightshift works on a branch of its own.")
+        fi
+        [[ "$git_name" =~ $name_re ]] || problems+=("identity.name must be one line of at most 100 characters, without < > \" \` \$ or \\.")
+        [[ "$git_email" =~ $email_re ]] || problems+=("identity.email must be an email address.")
+        [[ "$node" =~ $version_re ]] || problems+=("setup.node must be a version, for example '22'.")
+        [[ -z "$python" || "$python" =~ $version_re ]] || problems+=("setup.python must be a version, for example '3.12', or empty.")
+        [[ -z "$go" || "$go" =~ $version_re ]] || problems+=("setup.go must be a version, for example '1.23', or empty.")
+        [[ -z "$ci_workflow" || "$ci_workflow" =~ ^\.github/workflows/[A-Za-z0-9._-]+\.ya?ml$ ]] \
+          || problems+=("merge.ci_workflow must be a path like .github/workflows/ci.yml, or empty.")
+        while IFS= read -r w; do
+          [[ "$w" =~ $workflow_re ]] || problems+=("merge.dispatch_on_main entries must be workflow file names like ci.yml: $w")
+        done < <(get '.merge.dispatch_on_main[]')
+        [[ "$approve_ci" =~ ^(auto|always|never)$ ]] || problems+=("merge.approve_ci must be auto, always, or never.")
+        if ((${#problems[@]} > 0)); then
+          for p in "${problems[@]}"; do echo "::error::$CONFIG_PATH: $p"; done
+          exit 1
+        fi
+
+        status="$(grep -m1 -E '^status:' "$GOALS_PATH" | awk '{print $2}' | tr -d '\r' || true)"
+
+        # The PR's CI runs agent-written code. With approve_ci: auto it is approved only
+        # when the workflow, as it is on the default branch, grants read-only permissions
+        # everywhere and references no secret other than GITHUB_TOKEN.
+        ci_approval=allowed
+        case "$approve_ci" in
+          never) ci_approval="denied: merge.approve_ci is never" ;;
+          auto)
+            if [[ -z "$ci_workflow" ]]; then
+              ci_approval="denied: merge.ci_workflow is empty"
+            elif [[ ! -f "$ci_workflow" ]]; then
+              ci_approval="denied: $ci_workflow is not on the default branch"
+            elif [[ "$(yq -o=json '.' "$ci_workflow" 2>/dev/null | jq -r '
+                def ro: . == null or . == {} or . == "read-all"
+                  or (type == "object" and all(.[]; . == "read" or . == "none"));
+                (.permissions != null) and (.permissions | ro) and all((.jobs // {})[]; .permissions | ro)' 2>/dev/null)" != true ]]; then
+              ci_approval="denied: $ci_workflow does not declare read-only permissions at the top level and in every job"
+            elif grep -oE 'secrets(\.[A-Za-z0-9_]+)?' "$ci_workflow" | grep -qvx 'secrets.GITHUB_TOKEN'; then
+              ci_approval="denied: $ci_workflow references secrets other than GITHUB_TOKEN"
+            fi
+            ;;
+        esac
+
+        # Staged as the runner user, then installed root-owned in one place.
+        stage="$(mktemp -d)"
+        trap 'rm -rf "$stage"' EXIT
+        # Text ends with a newline, so the prompt section after it starts on its own line.
+        text() { jq -j "$1"' | if . == "" or endswith("\n") then . else . + "\n" end' <<<"$cfg"; }
+        # Setup scripts stop at the first failing command, like a workflow `run:` block.
+        setup_script() {
+          if [[ -z "$(get ".setup.$1")" ]]; then
+            : > "$2"
+          else
+            { echo 'set -eo pipefail'; text ".setup.$1"; } > "$2"
+          fi
+        }
+        jq . <<<"$cfg" > "$stage/config.json"
+        cat "$GOALS_PATH" > "$stage/GOALS.md"
+        text .agent.instructions > "$stage/instructions.md"
+        get '.checks[]' > "$stage/checks.txt"
+        get '.merge.allow[]' > "$stage/merge-allow.txt"
+        get '.merge.deny[]' > "$stage/merge-deny.txt"
+        get '.merge.required_checks[]' > "$stage/required-checks.txt"
+        setup_script root "$stage/setup-root.sh"
+        setup_script install "$stage/setup-install.sh"
+
+        sudo install -d -o root -g root -m 755 "$DEST"
+        sudo chown root:root "$DEST"
+        sudo chmod 755 "$DEST"
+        sudo install -o root -g root -m 644 \
+          "$GITHUB_ACTION_PATH/run.sh" "$GITHUB_ACTION_PATH/PROMPT.md" \
+          "$GITHUB_ACTION_PATH/codex-config.toml" "$GITHUB_ACTION_PATH/pr-feedback.sh" \
+          "$stage"/* "$DEST/"
+
+        {
+          echo "base-url=$base_url"
+          echo "model=$model"
+          echo "fallback-model=$fallback"
+          echo "minutes=$minutes"
+          echo "max-sessions=$max_sessions"
+          echo "branch=$branch"
+          echo "identity-name=$git_name"
+          echo "identity-email=$git_email"
+          echo "node=$node"
+          echo "python=$python"
+          echo "go=$go"
+          echo "pnpm=$pnpm"
+          echo "ci-workflow=$ci_workflow"
+          echo "dispatch-on-main=$(jq -c .merge.dispatch_on_main <<<"$cfg")"
+          echo "ci-approval=$ci_approval"
+          echo "status=$status"
+        } >> "$GITHUB_OUTPUT"
+        echo "Nightshift harness installed in $DEST (branch $branch, model $model, status ${status:-missing})."

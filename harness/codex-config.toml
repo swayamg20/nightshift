@@ -1,0 +1,16 @@
+# Codex CLI configuration for Nightshift. `run.sh` copies this into a throwaway
+# CODEX_HOME, passes the model with `--model`, and points the provider at the local key
+# proxy with `-c model_providers.keyproxy.base_url=...`.
+model_provider = "keyproxy"
+
+# `codex responses-api-proxy` runs as a separate user, holds the model API key (read
+# from stdin), and adds it to each request to `agent.base_url`. This process and the
+# commands the agent runs never have the key.
+[model_providers.keyproxy]
+name = "OpenAI-compatible Responses API via local key proxy"
+wire_api = "responses"
+
+# Keep GitHub and runner credentials out of the commands the agent runs.
+[shell_environment_policy]
+inherit = "all"
+exclude = ["*API_KEY*", "GH_*", "GITHUB_TOKEN", "ACTIONS_*"]

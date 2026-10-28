@@ -1,0 +1,525 @@
+name: Nightshift merge
+
+# The owner merges the Nightshift PR by replying `merge` to a run-report email (which
+# posts on the "Nightshift run log" issue) or by commenting `merge` on the PR. The merge
+# is tied to the exact commit named in the message replied to (or, for a typed comment,
+# to what existed when the owner commented), allowed only for the paths `merge.allow`
+# permits and `merge.deny` does not, brought up to date with the default branch, gated
+# on the default branch's required checks from the PR's own CI (failed jobs are retried
+# once), and reported in the same thread.
+#
+# Called from the target repository's nightshift-merge.yml on `issue_comment: [created]`
+# with `permissions: {}` at the top and actions, contents, pull-requests, and issues
+# write permissions on the calling job.
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        description: Nightshift configuration file, read from the default branch
+        type: string
+        required: false
+        default: .nightshift/config.yml
+
+permissions: {}
+
+jobs:
+  parse:
+    # Only the owner, only the run log or a PR opened by Nightshift. The comment text is
+    # read from the environment, never interpolated into a script. This job holds no
+    # token and runs no repository or harness code.
+    if: >-
+      github.event.comment.user.login == github.repository_owner && (
+        (github.event.issue.pull_request && github.event.issue.user.login == 'github-actions[bot]') ||
+        (github.event.issue.title == 'Nightshift run log' &&
+          contains(github.event.issue.labels.*.name, 'nightshift') &&
+          !contains(github.event.issue.labels.*.name, 'nightshift:needs-you')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    cache-mode: none
+    permissions: {}
+    outputs:
+      merge: ${{ steps.cmd.outputs.merge }}
+      mentions: ${{ steps.cmd.outputs.mentions }}
+      comment_id: ${{ steps.cmd.outputs.comment_id }}
+      quoted: ${{ steps.cmd.outputs.quoted }}
+    steps:
+      - name: Read the command
+        id: cmd
+        env:
+          BODY: ${{ github.event.comment.body }}
+          THREAD: ${{ github.event.issue.number }}
+          NIGHTSHIFT_BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          body="$(tr -d '\r' <<<"$BODY")"
+          # Email replies quote the report below the reply, so only the first non-empty
+          # line is the command. It must be a request to merge built only from known
+          # words: "merge", "/merge", "yes, merge it", "cool, merge it to main" (with the
+          # default branch's name), "ok merge it bro", "merge it pls". Anything else,
+          # including negations and questions, is not a command.
+          first="$(grep -m1 -v '^[[:space:]]*$' <<<"$body" || true)"
+          first="$(tr '[:upper:]' '[:lower:]' <<<"$first" | tr -s '[:space:]' ' ' | sed -E 's/^ +//; s/ +$//')"
+          echo "First line: $first"
+          # The default branch's name is matched literally.
+          base="$(tr '[:upper:]' '[:lower:]' <<<"$NIGHTSHIFT_BASE" | sed -E 's/[][\.^$*+?(){}|]/\\&/g')"
+          lead='(yes|yeah|yep|sure|ok|okay|alright|cool|great|nice|perfect|lgtm|looks good|sounds good|approved|go ahead|so)'
+          tail='(now|please|pls|plz|bro|bruh|man|dude|thanks|thank you|thx|asap)'
+          command="^(${lead}[ ,!.]+)*((please|pls|plz) )?/?merge( it| this| the pr)?( (in)?to ${base})?([ ,!.]+${tail})*[ .!]*$"
+          if [[ "$first" =~ $command ]]; then
+            echo "merge=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not a merge command."
+            # Mentions merging without being a command: say so instead of staying silent.
+            if [[ "$first" =~ (^|[^a-z])merge ]]; then echo "mentions=true" >> "$GITHUB_OUTPUT"; fi
+          fi
+          # Which message was replied to: GitHub's email footer links the comment, and
+          # it comes after everything else in the quoted message.
+          cid="$(grep -oE "/(issues|pull)/${THREAD}#issuecomment-[0-9]+" <<<"$body" | tail -n1 | grep -oE '[0-9]+$' || true)"
+          quoted=false
+          if grep -qE '^>|wrote:$' <<<"$body"; then quoted=true; fi
+          {
+            echo "comment_id=$cid"
+            echo "quoted=$quoted"
+          } >> "$GITHUB_OUTPUT"
+          echo "Replied-to comment: ${cid:-none}; quoted: $quoted"
+
+  not-a-command:
+    needs: parse
+    if: needs.parse.outputs.merge != 'true' && needs.parse.outputs.mentions == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    cache-mode: none
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Explain that nothing was merged
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          THREAD: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh api -X POST "repos/$GH_REPO/issues/comments/$COMMENT_ID/reactions" -f content=confused >/dev/null || true
+          gh api "repos/$GH_REPO/issues/$THREAD/comments" \
+            -f body="@$OWNER I did not treat that as a merge command, so nothing was merged. To merge, reply to the run report with \`merge\` (or \`merge it\`) on the first line." >/dev/null
+
+  merge:
+    needs: parse
+    if: needs.parse.outputs.merge == 'true'
+    concurrency:
+      group: nightshift-merge
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    cache-mode: none
+    permissions:
+      actions: write
+      checks: read
+      contents: write
+      issues: write
+      pull-requests: write
+      statuses: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      OWNER: ${{ github.repository_owner }}
+      THREAD: ${{ github.event.issue.number }}
+      COMMENT_PR: ${{ github.event.issue.pull_request && github.event.issue.number || '' }}
+      COMMENT_AT: ${{ github.event.comment.created_at }}
+      COMMENT_ID: ${{ github.event.comment.id }}
+      REPLY_COMMENT_ID: ${{ needs.parse.outputs.comment_id }}
+      QUOTED: ${{ needs.parse.outputs.quoted }}
+      NIGHTSHIFT_BASE: ${{ github.event.repository.default_branch }}
+      NIGHTSHIFT_HARNESS: /opt/nightshift-harness
+      CONFIG_PATH: ${{ inputs.config-path }}
+    steps:
+      # Reactions on the owner's comment: thumbs-up when picked up, then a rocket when
+      # merged or a confused face when not (the reply comment explains why).
+      - name: Acknowledge the command
+        run: |
+          gh api -X POST "repos/$GH_REPO/issues/comments/$COMMENT_ID/reactions" -f content='+1' >/dev/null \
+            || echo "::warning::Could not react to the comment"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Configuration comes from the default branch only: the working branch, the commit
+      # identity, the PR's CI workflow, the workflows to start after a merge, and the
+      # merge path rules (merge-allow.txt and merge-deny.txt in the harness directory).
+      - name: Read the Nightshift configuration
+        id: config
+        uses: swayamg20/nightshift/harness@main
+        with:
+          config-path: ${{ inputs.config-path }}
+          dest: ${{ env.NIGHTSHIFT_HARNESS }}
+
+      - name: Check, update, wait, and merge
+        env:
+          NIGHTSHIFT_BRANCH: ${{ steps.config.outputs.branch }}
+          GIT_NAME: ${{ steps.config.outputs.identity-name }}
+          GIT_EMAIL: ${{ steps.config.outputs.identity-email }}
+          CI_WORKFLOW: ${{ steps.config.outputs.ci-workflow }}
+          DISPATCH_ON_MAIN: ${{ steps.config.outputs.dispatch-on-main }}
+          CI_APPROVAL: ${{ steps.config.outputs.ci-approval }}
+        run: |
+          api="repos/$GH_REPO"
+          own_head="" bound_head="" head=""
+          neutralize() { sed -E 's/[Hh][Ee][Aa][Dd][[:space:]]*[Cc][Oo][Mm][Mm][Ii][Tt]/head-commit/g'; }
+          # Messages can embed agent-chosen text (file names), so the marker is
+          # neutralized in them; only a retry message names the commit to merge.
+          say() {
+            neutralize <<<"$1" > "$RUNNER_TEMP/message.md"
+            if [[ "${2:-}" == retry && -n "$head" && ( "$head" == "$own_head" || "$head" == "$bound_head" ) ]]; then
+              # shellcheck disable=SC2016 # Markdown code spans, not command substitution.
+              printf '\nHead commit: `%s`\n\nReply `merge` to this message to merge that commit.\n' "$head" >> "$RUNNER_TEMP/message.md"
+            fi
+          }
+          if [[ -z "$NIGHTSHIFT_BRANCH" || -z "$GIT_NAME" || -z "$GIT_EMAIL" ]]; then
+            say "Could not read the Nightshift branch and identity from \`$CONFIG_PATH\`; nothing merged."; exit 0
+          fi
+          # Without the PR's own CI workflow there is no run to approve, await, or retry.
+          if [[ -z "$CI_WORKFLOW" ]]; then
+            say "\`merge.ci_workflow\` is empty in \`$CONFIG_PATH\`, so a reply cannot wait for the PR's CI; nothing merged. Set it, or merge the PR on GitHub."; exit 0
+          fi
+          # Workflow runs report their full path.
+          [[ "$CI_WORKFLOW" == */* ]] || CI_WORKFLOW=".github/workflows/$CI_WORKFLOW"
+          git config user.name "$GIT_NAME"
+          git config user.email "$GIT_EMAIL"
+          remote_url="https://x-access-token:${GH_TOKEN}@${GITHUB_SERVER_URL#https://}/$GH_REPO.git"
+
+          pr_json="$(gh api "$api/pulls?head=$OWNER:$NIGHTSHIFT_BRANCH&base=$NIGHTSHIFT_BASE&state=open&per_page=100" \
+            --jq '[.[] | select(.head.repo.full_name == env.GH_REPO)][0] // empty')" \
+            || { say "Could not look up the Nightshift PR; nothing merged."; exit 0; }
+          if [[ -z "$pr_json" ]]; then say "There is no open Nightshift PR to merge."; exit 0; fi
+          pr="$(jq -r .number <<<"$pr_json")"
+          head="$(jq -r .head.sha <<<"$pr_json")"
+          pr_url="$GITHUB_SERVER_URL/$GH_REPO/pull/$pr"
+          if [[ -n "$COMMENT_PR" && "$COMMENT_PR" != "$pr" ]]; then
+            say "#$COMMENT_PR is not the open Nightshift PR (#$pr); nothing merged."; exit 0
+          fi
+
+          # Merge exactly what the owner saw.
+          head_marker() { grep -oE 'Head commit:[^0-9a-f]{0,12}[0-9a-f]{40}' | tail -n1 | grep -oE '[0-9a-f]{40}' || true; }
+          expected=""
+          if [[ -n "$REPLY_COMMENT_ID" ]]; then
+            # An email reply: the bot message it answered, fetched from GitHub.
+            expected="$(gh api "$api/issues/comments/$REPLY_COMMENT_ID" \
+              --jq 'select(.user.login == "github-actions[bot]" and (.issue_url | endswith("/issues/" + env.THREAD))) | .body' \
+              2>/dev/null | head_marker)"
+            if [[ -z "$expected" ]]; then
+              say "The message you replied to does not name a commit to merge. Reply \`merge\` to a run report email."; exit 0
+            fi
+          elif [[ "$QUOTED" == "true" ]]; then
+            say "Could not tell which message you replied to, so nothing was merged. Reply \`merge\` to the run report email again."; exit 0
+          elif [[ -z "$COMMENT_PR" ]]; then
+            # Typed on the run log: the newest report that existed when the owner commented.
+            expected="$(gh api "$api/issues/$THREAD/comments" --paginate \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and .created_at <= env.COMMENT_AT) | .body' \
+              2>/dev/null | head_marker)"
+            if [[ -z "$expected" ]]; then
+              say "Could not find a report naming a commit to merge. Reply \`merge\` to a run report email."; exit 0
+            fi
+          else
+            # Typed on the PR page: its head, provided it was there when the owner commented.
+            # A push to the branch creates the PR's CI run, so its earliest run dates the push.
+            pushed_at="$(gh api "$api/actions/runs?head_sha=$head&event=pull_request&per_page=100" \
+              --jq '[.workflow_runs[] | select(.head_repository.full_name == env.GH_REPO and .head_branch == env.NIGHTSHIFT_BRANCH) | .created_at] | min // empty' 2>/dev/null || true)"
+            if [[ -z "$pushed_at" || "$pushed_at" > "$COMMENT_AT" ]]; then
+              say "#$pr changed after your comment, so nothing was merged. Comment \`merge\` again to merge what it shows now."; exit 0
+            fi
+            expected="$head"
+          fi
+          if [[ "$expected" != "$head" ]]; then
+            say "Did not merge #$pr: it now points at ${head:0:7}, not ${expected:0:7} from the message you replied to. Reply \`merge\` to the newest report to merge the current commits."
+            exit 0
+          fi
+          bound_head="$head"
+
+          # Only the paths the configuration allows can be merged by a reply; anything
+          # else needs a review on GitHub. The rules come from the default branch, the
+          # list of changed files from git, and both fail closed.
+          if ! mapfile -t deny < "$NIGHTSHIFT_HARNESS/merge-deny.txt" \
+            || ! mapfile -t allow < "$NIGHTSHIFT_HARNESS/merge-allow.txt"; then
+            say "Could not read the merge path rules from \`$CONFIG_PATH\`; nothing merged."; exit 0
+          fi
+          if ! git fetch -q "$remote_url" "+refs/heads/$NIGHTSHIFT_BASE:refs/remotes/origin/$NIGHTSHIFT_BASE" "$head" \
+            || ! git diff -z --name-only --no-renames "refs/remotes/origin/$NIGHTSHIFT_BASE...$head" > "$RUNNER_TEMP/changed"; then
+            say "Could not list the files changed by #$pr; nothing merged."; exit 0
+          fi
+          mapfile -d '' -t changed < "$RUNNER_TEMP/changed"
+          if ((${#changed[@]} == 0)); then say "#$pr has no changes to merge."; exit 0; fi
+          matches() {
+            local path="$1" glob
+            shift
+            for glob in "$@"; do
+              [[ -n "$glob" ]] || continue
+              # shellcheck disable=SC2254 # Unquoted on purpose: the configured value is a glob.
+              case "$path" in $glob) return 0 ;; esac
+            done
+            return 1
+          }
+          blocked=()
+          for f in "${changed[@]}"; do
+            case "$f" in
+              # Agent memory is always mergeable; every other control file never is.
+              .nightshift/STATE.md | .nightshift/JOURNAL.md) continue ;;
+              .nightshift/*) blocked+=("$f"); continue ;;
+            esac
+            if [[ "$f" == "$CONFIG_PATH" ]]; then blocked+=("$f"); continue; fi
+            # Deny wins over allow, and a path matching neither is blocked.
+            if matches "$f" "${deny[@]}" || ! matches "$f" "${allow[@]}"; then blocked+=("$f"); fi
+          done
+          if ((${#blocked[@]} > 0)); then
+            say "Did not merge #$pr: a reply can only merge paths that \`merge.allow\` permits and \`merge.deny\` does not (see \`$CONFIG_PATH\`), and it also changes: ${blocked[*]:0:10}. Review $pr_url/files and merge it on GitHub."
+            exit 0
+          fi
+
+          # The default branch's required checks, from rulesets and from classic branch
+          # protection. Without any, nothing defines a passing PR, so fail closed.
+          mapfile -t required < <({
+            gh api "$api/rules/branches/$NIGHTSHIFT_BASE" \
+              --jq '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context' || true
+            gh api "$api/branches/$NIGHTSHIFT_BASE" \
+              --jq '.protection.required_status_checks // {} | (.contexts // [])[], ((.checks // [])[] | .context)' || true
+          } | sed '/^$/d' | sort -u)
+          gate_note=""
+          if ((${#required[@]} == 0)); then
+            # No ruleset or protection (for example a private repository on a free plan):
+            # fall back to merge.required_checks, enforced by this job alone.
+            mapfile -t required < <(sed '/^$/d' "$NIGHTSHIFT_HARNESS/required-checks.txt" 2>/dev/null | sort -u)
+            gate_note=" GitHub does not protect $NIGHTSHIFT_BASE here; Nightshift checked merge.required_checks itself."
+          fi
+          if ((${#required[@]} == 0)); then
+            say "Did not merge #$pr: no required status checks gate $NIGHTSHIFT_BASE, so nothing defines a passing PR. Require the CI checks with a ruleset or branch protection, or list them in merge.required_checks in \`$CONFIG_PATH\`."
+            exit 0
+          fi
+          echo "Required checks: ${required[*]}"
+          gh pr ready "$pr" >/dev/null 2>&1 || true
+
+          # Only this branch's CI runs; a fork PR pointed at the same commit is ignored.
+          ci_filter='.workflow_runs[] | select(.path == env.CI_WORKFLOW and .head_repository.full_name == env.GH_REPO and .head_branch == env.NIGHTSHIFT_BRANCH)'
+          approve_note=""
+          manual_approval=""
+          approve_pending() {
+            local ids id
+            if ! ids="$(gh api "$api/actions/runs?head_sha=$head&status=action_required&event=pull_request" --jq "$ci_filter | .id")"; then
+              approve_note="Could not list CI runs waiting for approval."
+              return 0
+            fi
+            # The CI runs agent-written code; approve it only when the harness found the
+            # workflow safe for that, or the owner set merge.approve_ci: always.
+            if [[ -n "$ids" && "$CI_APPROVAL" != allowed ]]; then
+              manual_approval="${CI_APPROVAL#denied: }"
+              return 0
+            fi
+            for id in $ids; do
+              if gh api -X POST "$api/actions/runs/$id/approve" >/dev/null; then
+                echo "Approved pending run $id"
+                approve_note=""
+              else
+                approve_note="Could not approve CI run $id."
+              fi
+            done
+          }
+
+          # The default branch can require the PR to be current. Merge it in with the
+          # owner's identity; the new head only adds commits already on that branch.
+          update_from_base() {
+            local behind
+            behind="$(gh api "$api/compare/$NIGHTSHIFT_BASE...$head" --jq .behind_by)" || return 1
+            ((behind == 0)) && return 0
+            git fetch -q "$remote_url" "+refs/heads/$NIGHTSHIFT_BASE:refs/remotes/origin/$NIGHTSHIFT_BASE" \
+              "+refs/heads/$NIGHTSHIFT_BRANCH:refs/remotes/origin/$NIGHTSHIFT_BRANCH" || return 1
+            [[ "$(git rev-parse "refs/remotes/origin/$NIGHTSHIFT_BRANCH")" == "$head" ]] || return 2
+            git checkout -q -B "$NIGHTSHIFT_BRANCH" "$head"
+            if ! git merge -q --no-edit "refs/remotes/origin/$NIGHTSHIFT_BASE"; then git merge --abort; return 3; fi
+            git -c core.hooksPath=/dev/null push -q --force-with-lease="refs/heads/$NIGHTSHIFT_BRANCH:$head" \
+              "$remote_url" "HEAD:refs/heads/$NIGHTSHIFT_BRANCH" || return 2
+            head="$(git rev-parse HEAD)"
+            own_head="$head"
+            echo "Merged $NIGHTSHIFT_BASE into $NIGHTSHIFT_BRANCH; new head $head"
+            # The PR's head can lag the push by a few seconds.
+            for _ in $(seq 1 36); do
+              [[ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)" == "$head" ]] && return 10
+              sleep 5
+            done
+            return 4
+          }
+          explain_update() {
+            case "$1" in
+              2) say "Did not merge #$pr: Nightshift pushed to it while I was bringing it up to date with $NIGHTSHIFT_BASE. Reply \`merge\` to the newest report." ;;
+              3) say "Did not merge #$pr: it is behind $NIGHTSHIFT_BASE and merging $NIGHTSHIFT_BASE into it conflicts. Resolve the conflict on the \`$NIGHTSHIFT_BRANCH\` branch." ;;
+              4) say "Did not merge #$pr: GitHub did not pick up the update from $NIGHTSHIFT_BASE in time." retry ;;
+              *) say "Did not merge #$pr: could not compare it with $NIGHTSHIFT_BASE." retry ;;
+            esac
+          }
+
+          wait_for_attempt() {
+            local id="$1" old="$2" attempt
+            for _ in $(seq 1 24); do
+              attempt="$(gh api "$api/actions/runs/$id" --jq .run_attempt 2>/dev/null || echo 0)"
+              ((attempt > old)) && return 0
+              sleep 10
+            done
+            return 1
+          }
+
+          rc=0; update_from_base || rc=$?
+          if ((rc != 0 && rc != 10)); then explain_update "$rc"; exit 0; fi
+
+          deadline=$((SECONDS + 80 * 60))
+          retried=false
+          view_errors=0
+          while :; do
+            if ((SECONDS > deadline)); then
+              say "Did not merge #$pr: required checks were still pending after 80 minutes.${approve_note:+ $approve_note}" retry
+              exit 0
+            fi
+            approve_pending
+            if [[ -n "$manual_approval" ]]; then
+              say "Did not merge #$pr: its CI is waiting for your approval, which Nightshift does not give automatically here ($manual_approval). Review the change, approve the run in the Actions tab, then reply \`merge\` to this message." retry
+              exit 0
+            fi
+            if ! current="$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)"; then
+              if ((++view_errors >= 10)); then say "Did not merge #$pr: GitHub did not answer for five minutes." retry; exit 0; fi
+              sleep 30
+              continue
+            fi
+            view_errors=0
+            if [[ "$current" != "$head" ]]; then
+              say "New commits reached #$pr while I was waiting, so I did not merge. Reply \`merge\` to the newest report."
+              exit 0
+            fi
+
+            checks="$(gh pr checks "$pr" --json name,bucket 2>/dev/null || true)"
+            [[ -n "$checks" ]] || checks='[]'
+            waiting=0
+            failed=()
+            for name in "${required[@]}"; do
+              # Several entries can share a name after a rerun; a pending or passing
+              # attempt outranks an older failure.
+              bucket="$(jq -r --arg n "$name" '[.[] | select(.name == $n) | .bucket] as $b
+                | if ($b | index("pending")) then "pending"
+                  elif ($b | index("pass")) or ($b | index("skipping")) then "pass"
+                  elif ($b | length) == 0 then "missing"
+                  else "fail" end' <<<"$checks")"
+              case "$bucket" in
+                pass) ;;
+                pending | missing) waiting=1 ;;
+                *) failed+=("$name") ;;
+              esac
+            done
+
+            runs="$(gh api "$api/actions/runs?head_sha=$head&event=pull_request&per_page=50" \
+              --jq "[$ci_filter | {id, status, conclusion, run_attempt}]" 2>/dev/null || echo '[]')"
+            ci_done="$(jq 'length > 0 and all(.[]; .status == "completed")' <<<"$runs")"
+
+            # Results are final only once the PR's own CI run has finished; a failing
+            # job usually ends before the slower ones, and a rerun replaces checks late.
+            if [[ "$ci_done" == "true" ]] && ((${#failed[@]} > 0)); then
+              if $retried; then
+                say "Did not merge #$pr: required checks failed after one retry: ${failed[*]}. See $pr_url/checks"
+                exit 0
+              fi
+              started=0
+              while read -r id attempt; do
+                [[ -n "$id" ]] || continue
+                if gh run rerun "$id" --failed && wait_for_attempt "$id" "$attempt"; then
+                  started=1
+                  echo "Reran failed jobs in run $id"
+                fi
+              done < <(jq -r '.[] | select(.conclusion != "success") | "\(.id) \(.run_attempt)"' <<<"$runs")
+              if ((started == 0)); then
+                say "Did not merge #$pr: required checks failed (${failed[*]}) and a rerun could not be started. See $pr_url/checks"
+                exit 0
+              fi
+              retried=true
+              continue
+            fi
+
+            if [[ "$ci_done" == "true" ]] && ((${#failed[@]} == 0 && waiting == 0)); then
+              # The default branch may have moved while CI ran.
+              rc=0; update_from_base || rc=$?
+              if ((rc == 0)); then break; fi
+              if ((rc == 10)); then retried=false; continue; fi
+              explain_update "$rc"; exit 0
+            fi
+            sleep 30
+          done
+
+          if gh pr merge "$pr" --merge --match-head-commit "$head" 2> "$RUNNER_TEMP/merge.err"; then
+            say "Merged #$pr into $NIGHTSHIFT_BASE."
+            sha="$(gh pr view "$pr" --json mergeCommit --jq '.mergeCommit.oid[0:7] // empty' 2>/dev/null || true)"
+            # GitHub does not auto-close linked issues for merges made with GITHUB_TOKEN,
+            # so close the PR's `Closes #N` issues here and report only those it closed.
+            closes=""
+            for n in $(gh pr view "$pr" --json closingIssuesReferences --jq '.closingIssuesReferences[].number' 2>/dev/null || true); do
+              if [[ "$(gh issue view "$n" --json state --jq .state 2>/dev/null)" == OPEN ]] \
+                && gh issue close "$n" --reason completed --comment "Fixed by #$pr${sha:+ ($sha)}." >/dev/null; then
+                closes+="${closes:+, }#$n"
+              fi
+            done
+            # Pushes made with GITHUB_TOKEN start no workflows, so start the configured
+            # ones on the default branch explicitly.
+            started=() not_started=()
+            while IFS= read -r wf; do
+              [[ -n "$wf" ]] || continue
+              if gh workflow run "$wf" --ref "$NIGHTSHIFT_BASE"; then started+=("$wf"); else not_started+=("$wf"); fi
+            done < <(jq -r '.[]' <<<"${DISPATCH_ON_MAIN:-[]}" 2>/dev/null || true)
+            # Remove the branch only if nothing new reached it after the merge, so a
+            # stale copy is never continued and concurrent work is never dropped.
+            git -c core.hooksPath=/dev/null push -q --force-with-lease="refs/heads/$NIGHTSHIFT_BRANCH:$head" \
+              "$remote_url" ":refs/heads/$NIGHTSHIFT_BRANCH" \
+              || echo "::notice::$NIGHTSHIFT_BRANCH gained commits after the merge; left in place for the next PR"
+            msg="Merged #$pr into $NIGHTSHIFT_BASE${sha:+ as $sha}."
+            if [[ -n "$closes" ]]; then msg+=" Closed $closes."; fi
+            if ((${#started[@]} > 0)); then msg+=" Started ${started[*]} on $NIGHTSHIFT_BASE."; fi
+            if ((${#not_started[@]} > 0)); then
+              msg+=" Could not start ${not_started[*]} on $NIGHTSHIFT_BASE; start it from the Actions tab."
+            fi
+            msg+="$gate_note"
+            say "$msg"
+            exit 0
+          fi
+
+          cat "$RUNNER_TEMP/merge.err"
+          state="$(gh pr view "$pr" --json mergeStateStatus,reviewDecision \
+            --jq '"\(.mergeStateStatus) \(.reviewDecision // "NONE")"' 2>/dev/null || echo "UNKNOWN")"
+          # Rules can require every review conversation to be resolved, including code
+          # scanning findings, so name them instead of reporting a bare BLOCKED.
+          # shellcheck disable=SC2016 # GraphQL variables, not shell expansions.
+          unresolved="$(gh api graphql -F number="$pr" -f owner="${GH_REPO%/*}" -f name="${GH_REPO#*/}" -f query='
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+                reviewThreads(first: 100) { nodes { isResolved path line comments(first: 1) { nodes { author { login } } } } } } } }' \
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)
+              | "`\(.path):\(.line // "?")` (\(.comments.nodes[0].author.login))"] | .[0:10] | join(", ")' 2>/dev/null || true)"
+          if [[ -n "$unresolved" ]]; then
+            say "Did not merge #$pr (state: $state): it has unresolved review conversations, which the rules on $NIGHTSHIFT_BASE can require to be resolved: $unresolved. Code scanning findings resolve themselves once fixed; the next Nightshift run sees them and fixes them. Resolve any others on $pr_url." retry
+            exit 0
+          fi
+          case "$state" in
+            *REVIEW_REQUIRED* | *CHANGES_REQUESTED*)
+              say "Did not merge #$pr: $NIGHTSHIFT_BASE's rules need an approving review ($state). Approve $pr_url first." retry ;;
+            BEHIND*)
+              say "Did not merge #$pr: $NIGHTSHIFT_BASE moved at the last moment." retry ;;
+            *)
+              say "Did not merge #$pr (state: $state): $(tail -n1 "$RUNNER_TEMP/merge.err")" retry ;;
+          esac
+
+      - name: Reply
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          message="$(cat "$RUNNER_TEMP/message.md" 2>/dev/null || true)"
+          [[ -n "$message" ]] || message="The merge attempt ended without a result; see the run."
+          gh api "repos/$GH_REPO/issues/$THREAD/comments" \
+            -f body="@$OWNER $message"$'\n\n'"Run: $RUN_URL" >/dev/null
+          if [[ "$message" == "Merged #"* ]]; then reaction=rocket; else reaction=confused; fi
+          gh api -X POST "repos/$GH_REPO/issues/comments/$COMMENT_ID/reactions" -f content="$reaction" >/dev/null \
+            || echo "::warning::Could not react to the comment"

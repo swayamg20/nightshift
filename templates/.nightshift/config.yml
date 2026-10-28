@@ -1,0 +1,70 @@
+# Nightshift configuration. Runs read this file from the default branch only, so
+# edits on the Nightshift branch have no effect. Omitted keys take the values shown
+# here, except agent.base_url, which is required. Every key is described in
+# https://github.com/swayamg20/nightshift/blob/main/docs/configuration.md
+
+agent:
+  # Required. OpenAI-compatible Responses API base URL. Model requests go to
+  # <base_url>/responses through a local proxy that holds NIGHTSHIFT_MODEL_API_KEY.
+  base_url: ''
+  # Primary model or deployment name.
+  model: gpt-6.1-sol
+  # Optional second model, tried in a session when the primary fails.
+  fallback_model: ''
+  # Agent time budget per run, in minutes.
+  minutes: 220
+  # Most Codex sessions per run. Each starts with a fresh context and resumes from
+  # .nightshift/STATE.md.
+  max_sessions: 8
+  # Repository-specific guidance appended to the agent prompt, for what your own
+  # instruction files (AGENTS.md, CONTRIBUTING.md) do not already say.
+  instructions: ''
+
+# Commits are rewritten to this author and committer before they are pushed.
+# When omitted: the repository owner's login and GitHub noreply address.
+# identity:
+#   name: Jane Doe
+#   email: 123+jane@users.noreply.github.com
+
+# Working branch. Its draft PR targets the default branch.
+branch: nightshift
+
+setup:
+  # Node.js is always installed because Codex needs it.
+  node: '22'
+  # Optional actions/setup-python and actions/setup-go versions, for example '3.12'.
+  python: ''
+  go: ''
+  # Enable pnpm through corepack.
+  pnpm: false
+  # Shell script run as root, before root is dropped and before any branch content is
+  # checked out, for system packages and services the checks need.
+  root: ''
+  # Shell script that installs dependencies without root. The workflow runs it on the
+  # default branch's code when a run starts fresh; the agent runs it at the start of
+  # every session.
+  install: ''
+
+# Commands run after the agent as a pre-push signal, and listed in the prompt as the
+# checks to run before committing. One single-line command per entry. The PR's own
+# CI is the merge gate.
+checks: []
+
+merge:
+  # The pull_request CI workflow whose runs are approved and awaited.
+  ci_workflow: .github/workflows/ci.yml
+  # Approve that CI for agent-written code: auto (only if it is read-only and uses no
+  # secrets other than GITHUB_TOKEN), always, or never.
+  approve_ci: auto
+  # Checks a reply merge waits for when the default branch has no ruleset or branch
+  # protection (for example a private repository on a free plan).
+  required_checks: []
+  # Workflow files started on the default branch after a reply merge, because merges
+  # made with GITHUB_TOKEN do not trigger push workflows. Each needs a
+  # workflow_dispatch trigger.
+  dispatch_on_main: [ci.yml]
+  # Paths a reply merge may change, as bash case globs where * also matches /.
+  # .nightshift/STATE.md and .nightshift/JOURNAL.md are always allowed, the rest of
+  # .nightshift/ never is. Deny is checked first; a path matching neither is blocked.
+  allow: ['src/*', '*/src/*', 'test/*', 'tests/*', '*/test/*', '*/tests/*', 'docs/*', '*.md']
+  deny: ['.github/*', '*/.github/*', '.nightshift/*', 'AGENTS.md', '*/AGENTS.md', 'CLAUDE.md', '*/CLAUDE.md']
