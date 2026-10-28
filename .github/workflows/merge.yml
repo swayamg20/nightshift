@@ -466,8 +466,16 @@ jobs:
             # GitHub does not auto-close linked issues for merges made with GITHUB_TOKEN,
             # so close the PR's `Closes #N` issues here and report only those it closed.
             closes=""
-            for n in $(gh pr view "$pr" --json closingIssuesReferences --jq '.closingIssuesReferences[].number' 2>/dev/null || true); do
-              if [[ "$(gh issue view "$n" --json state --jq .state 2>/dev/null)" == OPEN ]] \
+            # GitHub does not always register closing keywords in a body the bot edited, so
+            # the body's keywords count too. Nightshift's own issues (run log, questions)
+            # are never closed this way, whatever the agent wrote.
+            refs="$(gh pr view "$pr" --json closingIssuesReferences,body --jq '
+              [.closingIssuesReferences[].number]
+              + [(.body // "") | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\\s+#([0-9]+)\\b") | .[0] | tonumber]
+              | unique | .[]' 2>/dev/null || true)"
+            for n in $refs; do
+              if [[ "$(gh issue view "$n" --json state,labels \
+                    --jq 'if .state == "OPEN" and ([.labels[].name] | index("nightshift") | not) then "close" else "" end' 2>/dev/null)" == close ]] \
                 && gh issue close "$n" --reason completed --comment "Fixed by #$pr${sha:+ ($sha)}." >/dev/null; then
                 closes+="${closes:+, }#$n"
               fi
