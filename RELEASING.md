@@ -10,7 +10,8 @@ newest `v1.Y.Z`.
 repository with `./`. On `main`, `.github/workflows/agent.yml` therefore loads the
 harness as `swayamg20/nightshift/harness@main`. A release must not do that: a caller
 pinned to `@v1` would otherwise run the current `main` harness, not the one that was
-reviewed and tagged.
+reviewed and tagged. The release pins it to a commit SHA rather than the tag, because
+some repositories only allow actions pinned to a full-length SHA.
 
 So every release tag points at a commit, made off `main`, in which each
 `harness@main` reference is rewritten to that same tag. The commit is never merged
@@ -28,13 +29,17 @@ Run these from a clean clone with push access. Replace the version.
    bash -n init.sh harness/*.sh
    ```
 
-2. Make the release commit on a detached head:
+2. Make the release commit on a detached head. The harness is pinned to the full
+   commit SHA of `main` the release is cut from: the release commit changes only
+   the two `uses:` lines, so the harness files are identical, and a SHA pin works in
+   repositories that require actions to be pinned to a full-length commit SHA.
 
    ```sh
    version=v1.2.0
+   sha="$(git rev-parse main)"
    git switch --detach main
    grep -rl 'swayamg20/nightshift/harness@main' .github/workflows \
-     | xargs sed -i.bak "s#swayamg20/nightshift/harness@main#swayamg20/nightshift/harness@${version}#g"
+     | xargs sed -i.bak "s#swayamg20/nightshift/harness@main#swayamg20/nightshift/harness@${sha} \# ${version}#g"
    rm -f .github/workflows/*.bak
    ! grep -rn 'harness@main' .github/workflows   # must print nothing
    git diff --stat                                # only harness references change
