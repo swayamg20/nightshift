@@ -87,7 +87,7 @@ jobs:
       # configuration, or goals, even on its branch.
       - name: Install the harness and read the configuration
         id: harness
-        uses: swayamg20/nightshift/harness@main
+        uses: swayamg20/nightshift/harness@a66dfa88f58790586a7d551103f9dbb98244feee # v1.0.2
         with:
           config-path: ${{ inputs.config-path }}
           base-url: ${{ inputs.base-url }}
