@@ -116,9 +116,11 @@ posts. Its own notes live outside the downloaded artifact.
 
 7. **Gate.** `status: paused` in `GOALS.md` on the default branch stops every run. A
    scheduled run is skipped while a `nightshift:needs-you` question is open and
-   nothing changed since the last run report: no comment from the owner on an open
-   question and no newer commit on the default branch. Before the first report, it
-   is skipped only while a question has no reply from the owner. Review findings or
+   nothing changed since the last successful run started: no comment from the owner
+   on an open question since then, and the default branch still at the commit that
+   run read. Reports carry those values on a line only the publish job writes, and
+   failed runs do not count. Before the first successful report, it is skipped only
+   while a question has no reply from the owner. Review findings or
    failing checks the agent can fix alone keep it running, and a lookup that fails
    never skips a run.
 

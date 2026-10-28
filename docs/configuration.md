@@ -342,13 +342,15 @@ given to the agent verbatim.
 
 A scheduled run also exits at once when it has nothing new to work with: a
 `nightshift:needs-you` question is open, the open PR has no review findings or
-failing checks, and nothing changed since the newest run report on the "Nightshift
-run log" issue. Nothing changed means no owner comment on an open question is newer
-than that report, and the default branch's head commit was not committed after it,
-so a merge or an edit to `GOALS.md` wakes the schedule. Until the first report
-exists, a scheduled run exits only while a question has no owner comment. A manual
-dispatch and an owner reply always run, and a lookup that fails lets the run go
-ahead.
+failing checks, and nothing changed since the last successful run started. Each run
+report carries a hidden line with that run's start time, the default-branch commit
+it read, and whether it succeeded. Nothing changed means no owner comment on an open
+question since that start, and the default branch still points at that commit, so a
+merge or an edit to `GOALS.md` wakes the schedule, and so does a reply sent while a
+run was in progress. Runs that failed or could not publish do not count. Until a
+successful run has reported, a scheduled run exits only while a question has no
+owner comment. A manual dispatch and an owner reply always run, and a lookup that
+fails lets the run go ahead.
 
 ## Caller workflows
 

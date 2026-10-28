@@ -64,6 +64,8 @@ jobs:
       statuses: read
     outputs:
       status: ${{ steps.gate.outputs.status }}
+      started: ${{ steps.gate.outputs.started }}
+      base-sha: ${{ steps.gate.outputs.base-sha }}
       mode: ${{ steps.branch.outputs.mode }}
       base: ${{ steps.branch.outputs.base }}
       remote: ${{ steps.branch.outputs.remote }}
@@ -105,16 +107,22 @@ jobs:
           # success, so a capture with a fallback never mistakes an error for data.
           gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
           status="$STATUS"
+          # Recorded before anything else runs, and repeated in this run's report, so the
+          # next scheduled run can tell what changed since this one started.
+          started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          base_sha="$(git rev-parse HEAD)"
+          echo "started=$started" >> "$GITHUB_OUTPUT"
+          echo "base-sha=$base_sha" >> "$GITHUB_OUTPUT"
           # A scheduled run has nothing to do while a question waits on the owner and
-          # nothing changed since the last run report, and its memory-only commit would
-          # move the PR past the report the owner is reading. An owner comment on an open
-          # question or a new commit on the default branch (a merge, a GOALS.md edit)
-          # since that report wakes it. The owner's reply starts a run immediately; a
-          # manual dispatch always runs. idle prints what the run waits on when it has
-          # nothing to do, and fails, so the run goes ahead, when anything changed or any
-          # lookup fails.
+          # nothing changed since the last successful run started; its memory-only commit
+          # would only move the PR past the report the owner is reading. An owner comment
+          # on an open question after that start, or a different default-branch commit
+          # (a merge, a GOALS.md edit), wakes it. The owner's reply starts a run
+          # immediately; a manual dispatch always runs. idle prints what the run waits on
+          # when it has nothing to do, and fails, so the run goes ahead, when anything
+          # changed or any lookup fails.
           idle() {
-            local questions waiting feedback log_issue reports report="" replied head
+            local questions waiting feedback log_issue marker last_started last_base numbers replied head
             questions="$(gh issue list --label "$NEEDS_YOU_LABEL" --state open --limit 50 --json number,comments)" || return
             waiting="$(jq -r '[.[] | "#\(.number)"] | join(" ")' <<<"$questions")" || return
             [[ -n "$waiting" ]] || return
@@ -122,28 +130,38 @@ jobs:
             # without the owner, so they keep the run going.
             feedback="$(bash /opt/nightshift-harness/pr-feedback.sh count 2>/dev/null)" || return
             [[ "$feedback" == 0 ]] || return
-            # The newest run report the publish job posted on the run log.
+            # The newest report of a run that succeeded. Only the publish job's trusted
+            # second line counts; merge replies on the same thread start differently, and
+            # agent text in a report never sits on that line.
             log_issue="$(gh issue list --label nightshift --state open --limit 100 --json number,title \
               --jq 'map(select(.title == env.LOG_ISSUE_TITLE)) | .[0].number // empty')" || return
             if [[ -n "$log_issue" ]]; then
-              reports="$(gh api "repos/$GH_REPO/issues/$log_issue/comments?per_page=100" --paginate \
-                --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("Nightshift run finished"))) | .created_at')" \
+              marker="$(gh api "repos/$GH_REPO/issues/$log_issue/comments?per_page=100" --paginate \
+                --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("@" + env.OWNER + " Nightshift run finished: ")))
+                  | (.body | split("\n")[1] // "") | select(test("^<!-- nightshift-run: started=[0-9TZ:-]+ base=[0-9a-f]{40} outcome=ok -->$"))')" \
                 || return
-              report="$(sort <<<"$reports" | tail -n1)"
+              marker="$(sort <<<"$marker" | tail -n1)"
             fi
-            if [[ -z "$report" ]]; then
-              # No report to compare with: wait only on questions with no owner reply at all.
+            if [[ -z "${marker:-}" ]]; then
+              # No successful run to compare with: wait only on questions with no owner reply.
               waiting="$(jq -r '[.[] | select([.comments[] | select(.author.login == env.OWNER)] | length == 0) | "#\(.number)"] | join(" ")' \
                 <<<"$questions")" || return
               [[ -n "$waiting" ]] || return
               echo "Waiting on the owner's answer to $waiting"
               return
             fi
-            replied="$(jq -r '[.[].comments[] | select(.author.login == env.OWNER) | .createdAt] | max // empty' <<<"$questions")" \
-              || return
-            head="$(gh api "repos/$GH_REPO/branches/$NIGHTSHIFT_BASE" --jq .commit.commit.committer.date)" || return
-            [[ -n "$head" && ! "$replied" > "$report" && ! "$head" > "$report" ]] || return
-            echo "Waiting on the owner's answer to $waiting, with no owner reply and no new $NIGHTSHIFT_BASE commit since the run report of $report"
+            last_started="$(sed -E 's/.*started=([^ ]+) .*/\1/' <<<"$marker")"
+            last_base="$(sed -E 's/.*base=([0-9a-f]{40}) .*/\1/' <<<"$marker")"
+            # Any owner comment on an open question since that run started, from the full,
+            # paginated comment list.
+            numbers="$(jq -c '[.[].number]' <<<"$questions")" || return
+            replied="$(gh api "repos/$GH_REPO/issues/comments?since=$last_started&per_page=100" --paginate \
+              --jq '.[] | select(.user.login == env.OWNER) | (.issue_url | split("/") | last)' \
+              | jq -R --argjson open "$numbers" 'select(tonumber as $n | $open | index($n))')" || return
+            [[ -z "$replied" ]] || return
+            head="$(gh api "repos/$GH_REPO/branches/$NIGHTSHIFT_BASE" --jq .commit.sha)" || return
+            [[ -n "$head" && "$head" == "$last_base" ]] || return
+            echo "Waiting on the owner's answer to $waiting, with no owner reply and no new $NIGHTSHIFT_BASE commit since the run that started at $last_started"
           }
           if [[ "$status" == running && "$EVENT" == schedule ]] && reason="$(idle)"; then
             echo "::notice::$reason; skipping this scheduled run."
@@ -469,6 +487,8 @@ jobs:
       CONFLICT: ${{ needs.agent.outputs.conflict }}
       HAS_BUNDLE: ${{ needs.agent.outputs.bundle }}
       AGENT_RESULT: ${{ needs.agent.result }}
+      RUN_STARTED: ${{ needs.agent.outputs.started }}
+      RUN_BASE_SHA: ${{ needs.agent.outputs.base-sha }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     # Everything from the agent job is untrusted. This job runs no repository code, and
     # its own notes live outside the downloaded artifact.
@@ -731,6 +751,13 @@ jobs:
           # Trusted sections first, agent text after, head marker last.
           {
             echo "@$OWNER Nightshift run finished: $RUN_URL"
+            # Trusted, invisible line the next scheduled run's gate reads: when this run
+            # started, which default-branch commit it saw, and whether it succeeded.
+            outcome=ok
+            if [[ "$AGENT_RESULT" != success || ( "$HAS_BUNDLE" == true && "$PUBLISHED" != true ) ]]; then outcome=failed; fi
+            if [[ "$RUN_STARTED" =~ ^[0-9TZ:-]+$ && "$RUN_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "<!-- nightshift-run: started=$RUN_STARTED base=$RUN_BASE_SHA outcome=$outcome -->"
+            fi
             echo
             if [[ "$AGENT_RESULT" != "success" ]]; then
               echo "**The agent job ended with: $AGENT_RESULT.** See the run for details."; echo

@@ -171,11 +171,13 @@ These are security properties; the port must keep every one.
    and the reply instruction last. Comment ≤ 60,000 characters; questions capped at 5.
 7. **Gate**: `status: paused` stops everything. A scheduled run is skipped when an open
    `nightshift:needs-you` issue exists, `pr-feedback.sh count` is 0, and nothing changed
-   since the last report (newest `github-actions[bot]` comment containing "Nightshift
-   run finished" on the open run log): no owner comment on an open
-   `nightshift:needs-you` issue and no default-branch head committer date newer than
-   it. With no report, it is skipped only while such an issue has no owner comment.
-   Dispatches always run; a failed lookup means run.
+   since the last successful run started. The publish job writes a trusted second line
+   in each report, `<!-- nightshift-run: started=<UTC> base=<sha> outcome=ok|failed -->`,
+   and the gate reads only that line of reports starting `@<owner> Nightshift run
+   finished:`. Nothing changed means no owner comment (paginated, by `since=started`)
+   on an open `nightshift:needs-you` issue, and the default branch head SHA equals
+   `base`. With no successful report, it is skipped only while such an issue has no
+   owner comment. Dispatches always run; a failed lookup means run.
 8. **Reply trigger**: owner comment on an open `nightshift:needs-you` issue → dispatch
    the agent workflow and react 👍.
 9. **Merge**: parse job without token (first non-empty line; vocabulary-only command
