@@ -29,5 +29,8 @@ jobs:
     with:
       model: ${{ inputs.model }}
       minutes: ${{ inputs.minutes }}
+      # Optional: keep the endpoint out of a public repository by setting this variable
+      # instead of agent.base_url. Empty uses the config.
+      base-url: ${{ vars.NIGHTSHIFT_MODEL_BASE_URL }}
     secrets:
       model-api-key: ${{ secrets.NIGHTSHIFT_MODEL_API_KEY }}

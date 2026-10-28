@@ -162,6 +162,8 @@ jobs:
         with:
           config-path: ${{ inputs.config-path }}
           dest: ${{ env.NIGHTSHIFT_HARNESS }}
+          # The merge job never calls the model.
+          require-base-url: 'false'
 
       - name: Check, update, wait, and merge
         env:

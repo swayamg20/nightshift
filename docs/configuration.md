@@ -57,6 +57,15 @@ agent:
   # base_url: https://my-resource.openai.azure.com/openai/v1
 ```
 
+In a public repository you may not want the endpoint in the config. Leave
+`base_url` empty and set the repository variable `NIGHTSHIFT_MODEL_BASE_URL`
+instead; the caller workflow from `init.sh` passes it as the `base-url` input, which
+overrides the config when set.
+
+```sh
+gh variable set NIGHTSHIFT_MODEL_BASE_URL --body https://my-resource.openai.azure.com/openai/v1
+```
+
 ### `agent.model`
 
 The primary model or deployment name. A manual run can override it with the `model`

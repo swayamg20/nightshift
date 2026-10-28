@@ -18,6 +18,16 @@ inputs:
     description: Absolute directory the harness is installed into, owned by root.
     required: false
     default: /opt/nightshift-harness
+  base-url:
+    description: >-
+      Overrides agent.base_url, for example from a repository variable, so a public
+      repository need not commit its endpoint.
+    required: false
+    default: ''
+  require-base-url:
+    description: Fail when no base URL is configured. Jobs that never call the model pass false.
+    required: false
+    default: 'true'
 
 outputs:
   base-url:
@@ -123,6 +133,8 @@ runs:
         CONFIG_PATH: ${{ inputs.config-path }}
         GOALS_PATH: ${{ inputs.goals-path }}
         DEST: ${{ inputs.dest }}
+        BASE_URL_OVERRIDE: ${{ inputs.base-url }}
+        REQUIRE_BASE_URL: ${{ inputs.require-base-url }}
         # A scheduled run's event has no repository object, but it always runs on the
         # default branch, so there the ref names it.
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch || (github.event_name == 'schedule' && github.ref_name) || '' }}
@@ -209,6 +221,7 @@ runs:
         get() { jq -r "$1" <<<"$cfg"; }
 
         base_url="$(get .agent.base_url)"
+        if [[ -n "$BASE_URL_OVERRIDE" ]]; then base_url="$BASE_URL_OVERRIDE"; fi
         model="$(get .agent.model)"
         fallback="$(get .agent.fallback_model)"
         minutes="$(get .agent.minutes)"
@@ -234,7 +247,9 @@ runs:
         workflow_re='^[A-Za-z0-9._-]+\.ya?ml$'
         problems=()
         if [[ -z "$base_url" ]]; then
-          problems+=("agent.base_url is required: the OpenAI-compatible Responses API base URL, for example https://example.openai.azure.com/openai/v1.")
+          if [[ "$REQUIRE_BASE_URL" != false ]]; then
+            problems+=("agent.base_url is required: the OpenAI-compatible Responses API base URL, for example https://example.openai.azure.com/openai/v1. Set it in the config, or pass base-url from a repository variable.")
+          fi
         elif ! [[ "$base_url" =~ $url_re ]]; then
           problems+=("agent.base_url must be an https:// URL with no query string.")
         fi

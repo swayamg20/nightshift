@@ -26,6 +26,10 @@ on:
         description: Agent time budget override in minutes; empty uses agent.minutes
         type: string
         default: ''
+      base-url:
+        description: Overrides agent.base_url, for example from a repository variable; empty uses the config
+        type: string
+        default: ''
       config-path:
         description: Configuration file, read from the default branch
         type: string
@@ -86,6 +90,7 @@ jobs:
         uses: swayamg20/nightshift/harness@main
         with:
           config-path: ${{ inputs.config-path }}
+          base-url: ${{ inputs.base-url }}
 
       - name: Check status in GOALS.md
         id: gate
