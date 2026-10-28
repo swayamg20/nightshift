@@ -301,7 +301,7 @@ if $github; then
 	if [[ -n "$required" ]]; then
 		say ok "$default_branch requires checks: $required"
 	else
-		warn "$default_branch has no ruleset or branch protection requiring status checks, so reply merges will refuse to merge; require your CI's checks on it"
+		warn "$default_branch has no ruleset or branch protection requiring status checks. Require your CI's checks on it, or, where that is unavailable (for example a private repository on a free plan), list them under merge.required_checks in .nightshift/config.yml; otherwise reply merges refuse to merge"
 	fi
 	[[ "$linear" != true ]] \
 		|| warn "$default_branch requires linear history, but reply merges create merge commits and merge $default_branch into the working branch"
