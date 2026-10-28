@@ -16,7 +16,10 @@ Nightshift was extracted from the autopilot that develops
 
 ## How a run works
 
-1. A schedule (or your reply to a question) starts `nightshift.yml`.
+1. A schedule (or your reply to a question) starts `nightshift.yml`. While a question
+   is open, a scheduled run is skipped unless something changed since the last run
+   report (your comment on a question, or a new commit on the default branch) or the
+   PR has review findings or failing checks.
 2. The agent job reads the goal and configuration from the default branch, sets up
    toolchains and services, starts a proxy that holds the model key, drops root, and
    only then checks out the working branch. Codex works in sessions until the time

@@ -340,6 +340,16 @@ The first line starting with `status:` counts. `running` lets runs work; anythin
 such as `paused`, makes every run exit at once. The rest of the file is the goal,
 given to the agent verbatim.
 
+A scheduled run also exits at once when it has nothing new to work with: a
+`nightshift:needs-you` question is open, the open PR has no review findings or
+failing checks, and nothing changed since the newest run report on the "Nightshift
+run log" issue. Nothing changed means no owner comment on an open question is newer
+than that report, and the default branch's head commit was not committed after it,
+so a merge or an edit to `GOALS.md` wakes the schedule. Until the first report
+exists, a scheduled run exits only while a question has no owner comment. A manual
+dispatch and an owner reply always run, and a lookup that fails lets the run go
+ahead.
+
 ## Caller workflows
 
 The three files in `.github/workflows/` call the reusable workflows at `@v1`.
