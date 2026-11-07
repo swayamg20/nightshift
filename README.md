@@ -35,7 +35,7 @@ Nightshift was extracted from the autopilot that develops
 
 | Email you receive | Meaning | Your reply |
 |---|---|---|
-| `Nightshift: <question>` | The agent needs a decision | A plain answer. A run starts at once (👍 on your reply) |
+| `Nightshift: <question>` | The agent is blocked on something only you can give (it picks its own work otherwise) | A plain answer. A run starts at once (👍 on your reply) |
 | Comment on "Nightshift run log" | A run finished: commits, files changed, checks, summary, PR | `merge` to land exactly the named head commit (👍, then 🚀 or 😕) |
 | `Merged #N into <default branch>…` | A reply merge landed | Nothing |
 | `Did not merge #N: …` | Why a merge was refused | Usually reply `merge` to that message, or do what it says |
@@ -43,7 +43,7 @@ Nightshift was extracted from the autopilot that develops
 The merge command is the first non-empty line of your reply. `merge`, `merge it`,
 `yes, merge it`, and `ok merge it please` work; questions and negations do not. A line
 that mentions merging without being a command gets a confused reaction and an
-explanation. You can also
+explanation, and so does a merge command on a pull request Nightshift did not open. You can also
 comment `merge` on the PR itself.
 
 A reply merge brings the branch up to date with the default branch, waits for the

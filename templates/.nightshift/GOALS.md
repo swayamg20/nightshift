@@ -34,17 +34,15 @@ The goal below is a starting point. Replace it with your own before setting
 
 ## Current goal
 
-Work through the open issues the owner wrote, one at a time. When no owner-chosen
-issue is in progress, read those issues together with the code they touch, and ask
-the owner to choose among the three best candidates that one run can finish and
-verify. Implement only the chosen issue. When it is complete and verified, say so in
-the PR description with `Closes #N`, then propose the next three candidates.
+Work through the open issues the owner wrote, one at a time. Read them together with
+the code they touch, pick the most valuable one you can finish and verify in one run,
+implement it, and say which issue you picked and why in the run summary and the PR
+description, with `Closes #N`. Then pick the next one. Do not ask the owner to choose;
+ask only when no open issue can be done without something only the owner can give.
 
 ## Done when
 
-- Each candidate question lists three issues, each with a short plan, the files it
-  touches, how it will be verified, and a recommendation.
-- Each chosen issue lands on the Nightshift PR with passing checks and tests.
+- Each issue you pick lands on the Nightshift PR with passing checks and tests.
 
 ## Priorities and constraints
 

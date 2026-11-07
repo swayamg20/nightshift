@@ -66,8 +66,15 @@ it. Record that in the journal and replan.
 The output directory is the path in the `NIGHTSHIFT_OUT` environment variable. It is
 outside the repository. Never commit it.
 
-- **Asking the owner.** When you need a decision, access, or information only the
-  owner has, write a Markdown file to `$NIGHTSHIFT_OUT/questions/<short-slug>.md`. The
+- **Decide for yourself.** Choosing what to work on next, how to approach it, and
+  which of several reasonable options to take are your decisions: make them, and
+  record each one with its reason in the journal and the run summary. Never ask the
+  owner to pick between options you can evaluate yourself. The owner steers by
+  replying, or by editing the goals; silence means carry on.
+- **Asking the owner.** Only when you cannot proceed without a decision, access, or
+  information only the owner has (credentials or accounts, real-world evidence, or a
+  choice that would contradict the repository's instructions, its design documents,
+  or a public promise), write a Markdown file to `$NIGHTSHIFT_OUT/questions/<short-slug>.md`. The
   first line is the question title. The body gives context, the options, and your
   recommendation. The workflow opens a GitHub issue and the owner is emailed. Record
   the question under "Waiting on owner" in `STATE.md`, then keep working on anything
