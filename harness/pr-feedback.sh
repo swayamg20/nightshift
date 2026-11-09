@@ -50,7 +50,7 @@ query='query($owner: String!, $name: String!, $head: String!, $base: String!) {
         commits(last: 1) {
           nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
             __typename
-            ... on CheckRun { name conclusion }
+            ... on CheckRun { name conclusion title summary text detailsUrl databaseId }
             ... on StatusContext { context state }
           } } } } }
         }
@@ -71,9 +71,10 @@ fi
 threads="$(jq --arg owner "$OWNER" '[.reviewThreads.nodes[]
   | select(.isResolved | not)
   | select(.comments.nodes[0].author.login as $a | $a == $owner or $a == "github-advanced-security")]' <<<"$pr")"
-failing="$(jq '[.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [] | .[]
-  | select((.conclusion // .state) as $s | $s == "FAILURE" or $s == "ERROR" or $s == "TIMED_OUT")
-  | (.name // .context)] | unique' <<<"$pr")"
+failed_runs="$(jq '[.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [] | .[]
+  | select((.conclusion // .state) as $s | $s == "FAILURE" or $s == "ERROR" or $s == "TIMED_OUT")]
+  | unique_by(.name // .context)' <<<"$pr")"
+failing="$(jq '[.[] | (.name // .context)]' <<<"$failed_runs")"
 
 if [[ "$mode" == count ]]; then
 	jq -n --argjson t "$threads" --argjson f "$failing" '($t | length) + ($f | length)'
@@ -86,7 +87,30 @@ fi
 number="$(jq -r .number <<<"$pr")"
 printf 'Open PR #%s has findings that block merging. Fix them before new work.\n\n' "$number"
 jq -r '.[] | "### Review finding in `\(.path):\(.line // "?")` (\(.comments.nodes[0].author.login))\(if .isOutdated then ", on a line that has since changed" else "" end)\n\n\(.comments.nodes[0].body[0:2000])\n"' <<<"$threads"
-if [[ "$(jq 'length' <<<"$failing")" != 0 ]]; then
-	printf '### Failing checks\n\n'
-	jq -r '.[] | "- \(.)"' <<<"$failing"
-fi
+# Each failing check with its own output, and for workflow jobs the end of the job log,
+# so the agent can fix the failure instead of asking what it was.
+jq -c '.[]' <<<"$failed_runs" | while IFS= read -r check; do
+	name="$(jq -r '.name // .context' <<<"$check")"
+	printf '### Failing check: %s\n\n' "$name"
+	jq -r '[.title, .summary, .text] | map(select(. != null and . != "")) | join("\n\n") | .[0:3000]' <<<"$check"
+	url="$(jq -r '.detailsUrl // ""' <<<"$check")"
+	job="$(jq -r '.databaseId // ""' <<<"$check")"
+	# A workflow job's check run id is its job id.
+	if [[ "$url" == *"/actions/runs/"* && "$job" =~ ^[0-9]+$ ]]; then
+		if log="$(gh api "repos/$GH_REPO/actions/jobs/$job/logs" 2>/dev/null)"; then
+			# shellcheck disable=SC2016 # Markdown code fence, not command substitution.
+			log="$(sed -E 's/\x1b\[[0-9;]*m//g; s/^[0-9T:.-]+Z //' <<<"$log")"
+			# The lines before the first error marker say what failed; the end of a job
+			# log is only cleanup.
+			first_error="$(grep -n -m1 '^##\[error\]' <<<"$log" | cut -d: -f1 || true)"
+			if [[ -n "$first_error" ]]; then
+				excerpt="$(sed -n "$((first_error > 60 ? first_error - 60 : 1)),$((first_error + 10))p" <<<"$log")"
+			else
+				excerpt="$(tail -n 80 <<<"$log")"
+			fi
+			# shellcheck disable=SC2016 # Markdown code fence, not command substitution.
+			printf '\nFrom the job log:\n\n```text\n%s\n```\n' "$(cut -c1-300 <<<"$excerpt" | head -c 6000)"
+		fi
+	fi
+	printf '\n'
+done

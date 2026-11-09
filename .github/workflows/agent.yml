@@ -57,6 +57,8 @@ jobs:
     # the agent controls can plant entries in the default branch's cache scope.
     cache-mode: read
     permissions:
+      # actions: read lets pr-feedback.sh include failing CI job logs.
+      actions: read
       checks: read
       contents: read
       issues: read
