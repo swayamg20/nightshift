@@ -191,7 +191,7 @@ jobs:
       # merge path rules (merge-allow.txt and merge-deny.txt in the harness directory).
       - name: Read the Nightshift configuration
         id: config
-        uses: swayamg20/nightshift/harness@main
+        uses: swayamg20/nightshift/harness@0265b405f744dc084ca7858b1f604c342589d6bf # v1.0.5
         with:
           config-path: ${{ inputs.config-path }}
           dest: ${{ env.NIGHTSHIFT_HARNESS }}
