@@ -4,8 +4,9 @@
 # else are left out, because the repository may be public and the text reaches the agent.
 #
 # Usage: pr-feedback.sh count   prints the number of findings (0 when there is no PR)
-#        pr-feedback.sh key     prints a digest of which threads and checks the findings
-#                               are, not their text (none when there are no findings)
+#        pr-feedback.sh key     prints which threads and checks the findings are, as
+#                               sorted, comma-separated 8-hex-digit hashes, not their text
+#                               (none when there are no findings)
 #        pr-feedback.sh report  prints Markdown for the agent prompt (empty when none)
 # Requires GH_TOKEN (read access), GH_REPO (owner/name), OWNER, NIGHTSHIFT_BRANCH (the
 # working branch), and NIGHTSHIFT_BASE (the default branch the PR targets).
@@ -86,11 +87,12 @@ if [[ "$mode" == count ]]; then
 	jq -n --argjson t "$threads" --argjson f "$failing" '($t | length) + ($f | length)'
 	exit 0
 fi
-# The same threads and the same failing check names give the same key on any head
-# commit, so the gate can tell new findings from ones a run has already seen.
+# A thread or a failing check name hashes the same on any head commit, so the gate can
+# tell new findings from ones a run has already seen.
 if [[ "$mode" == key ]]; then
-	ids="$(jq -rn --argjson t "$threads" --argjson f "$failing" '($t | map("thread " + .id)) + ($f | map("check " + .)) | sort | .[]')"
-	if [[ -z "$ids" ]]; then echo none; else sha256sum <<<"$ids" | cut -c1-16; fi
+	hashes="$(jq -rn --argjson t "$threads" --argjson f "$failing" '($t | map("thread " + .id)) + ($f | map("check " + .)) | .[]' |
+		while IFS= read -r id; do printf '%s' "$id" | sha256sum | cut -c1-8; done | sort -u | paste -sd, -)"
+	echo "${hashes:-none}"
 	exit 0
 fi
 

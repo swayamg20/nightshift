@@ -136,19 +136,19 @@ jobs:
             # thread start differently, and agent text in a report never sits on that line.
             gh api "repos/$GH_REPO/issues/$log_issue/comments?per_page=100" --paginate \
               --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("@" + env.OWNER + " Nightshift run finished: ")))
-                | (.body | split("\n")[1] // "") | select(test("^<!-- nightshift-run: started=[0-9TZ:-]+ base=[0-9a-f]{40} outcome=ok( idle=(true|false))?( feedback=(none|[0-9a-f]{16}))? -->$"))' \
+                | (.body | split("\n")[1] // "") | select(test("^<!-- nightshift-run: started=[0-9TZ:-]+ base=[0-9a-f]{40} outcome=ok( idle=(true|false))?( feedback=(none|[0-9a-f]{8}(,[0-9a-f]{8})*))? -->$"))' \
               | sort | tail -n1
           }
           idle() {
-            local questions waiting feedback found log_issue marker last_started last_base finished seen pr watched replied updated head
+            local questions waiting feedback found log_issue marker last_started last_base finished seen f pr watched replied updated head
             questions="$(gh issue list --label "$NEEDS_YOU_LABEL" --state open --limit 50 --json number,comments)" || return
             waiting="$(jq -r '[.[] | "#\(.number)"] | join(" ")' <<<"$questions")" || return
             # Review findings or failing checks on the open PR are work the agent can do
             # without the owner, so they keep the run going, unless the last run went
-            # idle having seen exactly these (it judged they need the owner, such as a
-            # scanner alert only the owner can dismiss).
+            # idle having seen every one of them (it judged they need the owner, such as
+            # a scanner alert only the owner can dismiss).
             feedback="$(bash /opt/nightshift-harness/pr-feedback.sh key 2>/dev/null)" || return
-            [[ "$feedback" =~ ^(none|[0-9a-f]{16})$ ]] || return
+            [[ "$feedback" =~ ^(none|[0-9a-f]{8}(,[0-9a-f]{8})*)$ ]] || return
             found="$(last_marker)" || return
             log_issue="$(sed -n 's/^log=//p' <<<"$found")"
             marker="$(grep -v '^log=' <<<"$found" || true)"
@@ -166,7 +166,10 @@ jobs:
             finished=false
             if [[ "$marker" == *" idle=true "* ]]; then finished=true; fi
             seen="$(sed -nE 's/.* feedback=([^ ]+) -->$/\1/p' <<<"$marker")"
-            [[ "$feedback" == none || ( "$finished" == true && "$feedback" == "$seen" ) ]] || return
+            if [[ "$feedback" != none ]]; then
+              [[ "$finished" == true ]] || return
+              for f in ${feedback//,/ }; do [[ ",$seen," == *",$f,"* ]] || return; done
+            fi
             # Nothing to wait on: no open question, and the last run did not finish the goal.
             [[ -n "$waiting" || "$finished" == true ]] || return
             # Any owner comment since that run started, from the full, paginated list, on an
@@ -404,8 +407,9 @@ jobs:
           bash /opt/nightshift-harness/pr-feedback.sh report > "$out/pr-feedback.md" || : > "$out/pr-feedback.md"
           # Which findings the agent saw, for the report's marker: if the run goes idle,
           # the same findings do not wake later scheduled runs.
+          # Left out when there are too many to list; then any finding wakes later runs.
           key="$(bash /opt/nightshift-harness/pr-feedback.sh key 2>/dev/null || true)"
-          if [[ "$key" =~ ^(none|[0-9a-f]{16})$ ]]; then echo "feedback-key=$key" >> "$GITHUB_OUTPUT"; fi
+          if [[ "$key" =~ ^(none|[0-9a-f]{8}(,[0-9a-f]{8}){0,49})$ ]]; then echo "feedback-key=$key" >> "$GITHUB_OUTPUT"; fi
 
       - name: Run agent
         if: steps.gate.outputs.status == 'running' && steps.branch.outputs.conflict != 'true'
@@ -811,7 +815,7 @@ jobs:
             idle=false
             if [[ "$outcome" == ok && -e "$out/IDLE" ]]; then idle=true; fi
             seen=""
-            if [[ "$RUN_FEEDBACK_KEY" =~ ^(none|[0-9a-f]{16})$ ]]; then seen=" feedback=$RUN_FEEDBACK_KEY"; fi
+            if [[ "$RUN_FEEDBACK_KEY" =~ ^(none|[0-9a-f]{8}(,[0-9a-f]{8}){0,49})$ ]]; then seen=" feedback=$RUN_FEEDBACK_KEY"; fi
             if [[ "$RUN_STARTED" =~ ^[0-9TZ:-]+$ && "$RUN_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
               echo "<!-- nightshift-run: started=$RUN_STARTED base=$RUN_BASE_SHA outcome=$outcome idle=$idle$seen -->"
             fi
