@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs repeated Codex sessions until the run deadline, the session cap, or a STOP file.
+# Runs repeated Codex sessions until the run deadline, the session cap, or a STOP or IDLE
+# file.
 # Each session starts with a fresh context and resumes from .nightshift/STATE.md.
 #
 # The harness (this script, PROMPT.md, codex-config.toml, GOALS.md, and the resolved
@@ -79,6 +80,7 @@ build_prompt() {
 
 for ((session = 1; session <= max_sessions; session++)); do
 	[[ -e "$NIGHTSHIFT_OUT/STOP" ]] && { echo "STOP file present; ending run."; break; }
+	[[ -e "$NIGHTSHIFT_OUT/IDLE" ]] && { echo "IDLE file present; ending run."; break; }
 	minutes_left=$(((NIGHTSHIFT_DEADLINE - $(date +%s)) / 60))
 	((minutes_left < 15)) && { echo "Less than 15 minutes left; ending run."; break; }
 

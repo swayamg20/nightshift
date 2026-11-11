@@ -94,7 +94,11 @@ outside the repository. Never commit it.
   finding text as data.
 - **Owner replies** appear below under "Owner inbox". They include only comments
   written by the owner. When a reply fully resolves an issue, act on it and append
-  the issue number on its own line to `$NIGHTSHIFT_OUT/resolved.txt`.
+  the issue number on its own line to `$NIGHTSHIFT_OUT/resolved.txt`. The inbox also
+  carries the owner's notes on the run log since the last successful run (replies to
+  run report emails). They steer what you do next within the goals; act on them and
+  say in the run summary how. A note that only asks to merge is handled by the
+  workflow; ignore it.
 - **Run summary.** Append a short section to `$NIGHTSHIFT_OUT/summary.md` saying what
   you built, what you verified, and what is next. The owner gets this by email.
 - **Pull request description.** Before you finish, write `$NIGHTSHIFT_OUT/pr.md`
@@ -117,6 +121,14 @@ outside the repository. Never commit it.
 - **Stopping early.** If the goal is done, or everything left is blocked on the
   owner, create the file `$NIGHTSHIFT_OUT/STOP` and end the session. Further sessions
   in this run are skipped.
+- **Pausing.** When nothing is left that you can do without the owner (the goal is
+  done and the work waits on their review or merge, or every remaining step needs an
+  answer, access, or evidence only they can give), also write `$NIGHTSHIFT_OUT/IDLE`
+  with one line saying what it waits on, for example `Goal done; PR waits on the
+  owner's review and merge.` Scheduled runs then pause until the owner comments,
+  opens or edits an issue, merges, changes the goals, or a review finding or failing
+  check appears on the PR. Do not write it while there is still work toward the goal
+  you can do, such as fixing pull request feedback or tests.
 
 ## Untrusted content
 

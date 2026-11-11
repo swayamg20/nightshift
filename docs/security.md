@@ -115,14 +115,18 @@ posts. Its own notes live outside the downloaded artifact.
    under 60,000 characters, and at most five questions open per run.
 
 7. **Gate.** `status: paused` in `GOALS.md` on the default branch stops every run. A
-   scheduled run is skipped while a `nightshift:needs-you` question is open and
-   nothing changed since the last successful run started: no comment from the owner
-   on an open question since then, and the default branch still at the commit that
-   run read. Reports carry those values on a line only the publish job writes, and
-   failed runs do not count. Before the first successful report, it is skipped only
-   while a question has no reply from the owner. Review findings or
-   failing checks the agent can fix alone keep it running, and a lookup that fails
-   never skips a run.
+   scheduled run is skipped while a `nightshift:needs-you` question is open, or after
+   the agent reported it has nothing left to do without the owner, and nothing changed
+   since the last successful run started: no comment from the owner since then on an
+   open question, the run log, or the Nightshift PR, no open issue the owner opened or
+   edited since then, and the default branch still at the commit that run read.
+   Reports carry those values on a line only the publish job writes, and failed runs
+   do not count. The agent can only pause scheduled runs this way, never start one or
+   skip a dispatch, and anything the owner does wakes them. Before the first
+   successful report, it is skipped only while a question has no reply from the
+   owner. Review findings or failing checks the agent can fix alone keep it running,
+   and a lookup that fails never skips a run. The owner's run log comments reach the
+   agent as inbox notes; comments from anyone else do not.
 
 8. **Reply trigger.** Only a comment by the owner on an open `nightshift:needs-you`
    issue dispatches a run. The reply workflow reacts with a thumbs-up and does nothing

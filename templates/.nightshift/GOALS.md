@@ -15,10 +15,14 @@ before it starts; the agent cannot change the copy it reads.
   starts fresh from the default branch.
 - Runs start on the schedule in `.github/workflows/nightshift.yml`, and immediately
   when the owner replies on an open `nightshift:needs-you` issue. While such an issue
-  is open, a scheduled run is skipped unless something changed since the last
-  successful run started (an owner comment on an open question, or a different
-  commit on the default branch such as a merge or an edit to this file) or the PR has
-  review findings or failing checks.
+  is open, or after a run reported that nothing is left to do without the owner (for
+  example the goal is done and the PR waits on review), a scheduled run is skipped
+  unless something changed since the last successful run started (an owner comment
+  on an open question, the run log, or the PR; an issue the owner opened or edited;
+  a different commit on the default branch such as a merge or an edit to this file)
+  or the PR has review findings or failing checks.
+- Reply to a run-report email with instructions to steer the next run. The agent
+  reads the owner's comments on the run log as notes.
 - Reply `merge` to a run-report email (or comment `merge` on the Nightshift PR) to
   merge the exact commit that report names, once the default branch's required
   checks pass. A reply can merge only paths that `merge.allow` in

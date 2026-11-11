@@ -341,16 +341,25 @@ such as `paused`, makes every run exit at once. The rest of the file is the goal
 given to the agent verbatim.
 
 A scheduled run also exits at once when it has nothing new to work with: a
-`nightshift:needs-you` question is open, the open PR has no review findings or
-failing checks, and nothing changed since the last successful run started. Each run
-report carries a hidden line with that run's start time, the default-branch commit
-it read, and whether it succeeded. Nothing changed means no owner comment on an open
-question since that start, and the default branch still points at that commit, so a
-merge or an edit to `GOALS.md` wakes the schedule, and so does a reply sent while a
-run was in progress. Runs that failed or could not publish do not count. Until a
-successful run has reported, a scheduled run exits only while a question has no
-owner comment. A manual dispatch and an owner reply always run, and a lookup that
-fails lets the run go ahead.
+`nightshift:needs-you` question is open, or the last successful run reported that
+nothing is left to do without the owner; the open PR has no review findings or
+failing checks; and nothing changed since the last successful run started. The agent
+reports the second case by writing an `IDLE` file, for example when the goal is done
+and the PR waits on review, and that run's report says scheduled runs are paused.
+Each run report carries a hidden line with that run's start time, the default-branch
+commit it read, whether it succeeded, and whether it went idle. Nothing changed
+means no owner comment since that start on an open question, the run log, or the
+Nightshift PR, no open issue the owner opened or edited since then, and the default
+branch still points at that commit. So a merge or an edit to `GOALS.md` wakes the
+schedule, and so does a comment sent while a run was in progress. Runs that failed
+or could not publish do not count. Until a successful run has reported, a scheduled
+run exits only while a question has no owner comment. A manual dispatch and an owner
+reply on a question always run, and a lookup that fails lets the run go ahead.
+
+The owner's comments on the run log since the last successful run started reach the
+agent as notes in its inbox, without the quoted report, so replying to a run report
+email with instructions steers the next run. Only a reply on a question starts a run
+at once; a note on the run log is read by the next scheduled run.
 
 ## Caller workflows
 
