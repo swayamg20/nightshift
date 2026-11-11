@@ -4,6 +4,8 @@
 # else are left out, because the repository may be public and the text reaches the agent.
 #
 # Usage: pr-feedback.sh count   prints the number of findings (0 when there is no PR)
+#        pr-feedback.sh key     prints a digest of which threads and checks the findings
+#                               are, not their text (none when there are no findings)
 #        pr-feedback.sh report  prints Markdown for the agent prompt (empty when none)
 # Requires GH_TOKEN (read access), GH_REPO (owner/name), OWNER, NIGHTSHIFT_BRANCH (the
 # working branch), and NIGHTSHIFT_BASE (the default branch the PR targets).
@@ -14,13 +16,13 @@ set -euo pipefail
 gh() { local out; out="$(command gh "$@")" || return; [[ -z "$out" ]] || printf '%s\n' "$out"; }
 
 usage() {
-	echo "usage: pr-feedback.sh count|report" >&2
+	echo "usage: pr-feedback.sh count|key|report" >&2
 	exit 2
 }
 (($# == 1)) || usage
 mode="$1"
 case "$mode" in
-count | report) ;;
+count | key | report) ;;
 *) usage ;;
 esac
 : "${GH_REPO:?}" "${OWNER:?}" "${NIGHTSHIFT_BRANCH:?}" "${NIGHTSHIFT_BASE:?}"
@@ -40,6 +42,7 @@ query='query($owner: String!, $name: String!, $head: String!, $base: String!) {
         headRepository { nameWithOwner }
         reviewThreads(first: 100) {
           nodes {
+            id
             isResolved
             isOutdated
             path
@@ -64,7 +67,10 @@ data="$(gh api graphql -f query="$query" -f owner="${GH_REPO%/*}" -f name="${GH_
 # Same-repository PRs only; a fork can open a PR from a branch with the same name.
 pr="$(jq --arg repo "$GH_REPO" '[.data.repository.pullRequests.nodes[] | select(.headRepository.nameWithOwner == $repo)][0] // empty' <<<"$data")"
 if [[ -z "$pr" ]]; then
-	[[ "$mode" == count ]] && echo 0
+	case "$mode" in
+	count) echo 0 ;;
+	key) echo none ;;
+	esac
 	exit 0
 fi
 
@@ -78,6 +84,13 @@ failing="$(jq '[.[] | (.name // .context)]' <<<"$failed_runs")"
 
 if [[ "$mode" == count ]]; then
 	jq -n --argjson t "$threads" --argjson f "$failing" '($t | length) + ($f | length)'
+	exit 0
+fi
+# The same threads and the same failing check names give the same key on any head
+# commit, so the gate can tell new findings from ones a run has already seen.
+if [[ "$mode" == key ]]; then
+	ids="$(jq -rn --argjson t "$threads" --argjson f "$failing" '($t | map("thread " + .id)) + ($f | map("check " + .)) | sort | .[]')"
+	if [[ -z "$ids" ]]; then echo none; else sha256sum <<<"$ids" | cut -c1-16; fi
 	exit 0
 fi
 

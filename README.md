@@ -21,7 +21,8 @@ Nightshift was extracted from the autopilot that develops
    is done and the PR waits on your review), a scheduled run is skipped unless
    something changed since the last successful run started: your comment on a
    question, the run log, or the PR; an issue you opened or edited; a different
-   commit on the default branch; or review findings or failing checks on the PR.
+   commit on the default branch; or review findings or failing checks on the PR
+   (after a pause, only ones the paused run had not seen).
 2. The agent job reads the goal and configuration from the default branch, sets up
    toolchains and services, starts a proxy that holds the model key, drops root, and
    only then checks out the working branch. Codex works in sessions until the time

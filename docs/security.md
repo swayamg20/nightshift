@@ -124,8 +124,8 @@ posts. Its own notes live outside the downloaded artifact.
    do not count. The agent can only pause scheduled runs this way, never start one or
    skip a dispatch, and anything the owner does wakes them. Before the first
    successful report, it is skipped only while a question has no reply from the
-   owner. Review findings or failing checks the agent can fix alone keep it running,
-   and a lookup that fails never skips a run. The owner's run log comments reach the
+   owner. Review findings or failing checks keep it running, except ones a run had
+   already seen when it went idle, and a lookup that fails never skips a run. The owner's run log comments reach the
    agent as inbox notes; comments from anyone else do not.
 
 8. **Reply trigger.** Only a comment by the owner on an open `nightshift:needs-you`

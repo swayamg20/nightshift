@@ -343,11 +343,14 @@ given to the agent verbatim.
 A scheduled run also exits at once when it has nothing new to work with: a
 `nightshift:needs-you` question is open, or the last successful run reported that
 nothing is left to do without the owner; the open PR has no review findings or
-failing checks; and nothing changed since the last successful run started. The agent
+failing checks (after such a report, none other than the ones that run saw, which
+it judged to need the owner, such as a scanner alert only the owner can dismiss);
+and nothing changed since the last successful run started. The agent
 reports the second case by writing an `IDLE` file, for example when the goal is done
 and the PR waits on review, and that run's report says scheduled runs are paused.
 Each run report carries a hidden line with that run's start time, the default-branch
-commit it read, whether it succeeded, and whether it went idle. Nothing changed
+commit it read, whether it succeeded, whether it went idle, and which PR findings it
+saw. Nothing changed
 means no owner comment since that start on an open question, the run log, or the
 Nightshift PR, no open issue the owner opened or edited since then, and the default
 branch still points at that commit. So a merge or an edit to `GOALS.md` wakes the

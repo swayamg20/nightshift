@@ -68,6 +68,7 @@ jobs:
       status: ${{ steps.gate.outputs.status }}
       started: ${{ steps.gate.outputs.started }}
       base-sha: ${{ steps.gate.outputs.base-sha }}
+      feedback-key: ${{ steps.collect.outputs.feedback-key }}
       mode: ${{ steps.branch.outputs.mode }}
       base: ${{ steps.branch.outputs.base }}
       remote: ${{ steps.branch.outputs.remote }}
@@ -135,21 +136,24 @@ jobs:
             # thread start differently, and agent text in a report never sits on that line.
             gh api "repos/$GH_REPO/issues/$log_issue/comments?per_page=100" --paginate \
               --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("@" + env.OWNER + " Nightshift run finished: ")))
-                | (.body | split("\n")[1] // "") | select(test("^<!-- nightshift-run: started=[0-9TZ:-]+ base=[0-9a-f]{40} outcome=ok( idle=(true|false))? -->$"))' \
+                | (.body | split("\n")[1] // "") | select(test("^<!-- nightshift-run: started=[0-9TZ:-]+ base=[0-9a-f]{40} outcome=ok( idle=(true|false))?( feedback=(none|[0-9a-f]{16}))? -->$"))' \
               | sort | tail -n1
           }
           idle() {
-            local questions waiting feedback found log_issue marker last_started last_base finished pr watched replied updated head
+            local questions waiting feedback found log_issue marker last_started last_base finished seen pr watched replied updated head
             questions="$(gh issue list --label "$NEEDS_YOU_LABEL" --state open --limit 50 --json number,comments)" || return
             waiting="$(jq -r '[.[] | "#\(.number)"] | join(" ")' <<<"$questions")" || return
             # Review findings or failing checks on the open PR are work the agent can do
-            # without the owner, so they keep the run going.
-            feedback="$(bash /opt/nightshift-harness/pr-feedback.sh count 2>/dev/null)" || return
-            [[ "$feedback" == 0 ]] || return
+            # without the owner, so they keep the run going, unless the last run went
+            # idle having seen exactly these (it judged they need the owner, such as a
+            # scanner alert only the owner can dismiss).
+            feedback="$(bash /opt/nightshift-harness/pr-feedback.sh key 2>/dev/null)" || return
+            [[ "$feedback" =~ ^(none|[0-9a-f]{16})$ ]] || return
             found="$(last_marker)" || return
             log_issue="$(sed -n 's/^log=//p' <<<"$found")"
             marker="$(grep -v '^log=' <<<"$found" || true)"
             if [[ -z "$marker" ]]; then
+              [[ "$feedback" == none ]] || return
               # No successful run to compare with: wait only on questions with no owner reply.
               waiting="$(jq -r '[.[] | select([.comments[] | select(.author.login == env.OWNER)] | length == 0) | "#\(.number)"] | join(" ")' \
                 <<<"$questions")" || return
@@ -160,7 +164,9 @@ jobs:
             last_started="$(sed -E 's/.*started=([^ ]+) .*/\1/' <<<"$marker")"
             last_base="$(sed -E 's/.*base=([0-9a-f]{40}) .*/\1/' <<<"$marker")"
             finished=false
-            if [[ "$marker" == *" idle=true -->" ]]; then finished=true; fi
+            if [[ "$marker" == *" idle=true "* ]]; then finished=true; fi
+            seen="$(sed -nE 's/.* feedback=([^ ]+) -->$/\1/p' <<<"$marker")"
+            [[ "$feedback" == none || ( "$finished" == true && "$feedback" == "$seen" ) ]] || return
             # Nothing to wait on: no open question, and the last run did not finish the goal.
             [[ -n "$waiting" || "$finished" == true ]] || return
             # Any owner comment since that run started, from the full, paginated list, on an
@@ -353,6 +359,7 @@ jobs:
           fi
 
       - name: Collect owner replies and open-issue snapshot
+        id: collect
         if: steps.gate.outputs.status == 'running' && steps.branch.outputs.conflict != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -395,6 +402,10 @@ jobs:
           # Unresolved review findings and failing checks on the open PR, so the agent
           # can fix what blocks the merge. Only the owner's and code scanning's threads count.
           bash /opt/nightshift-harness/pr-feedback.sh report > "$out/pr-feedback.md" || : > "$out/pr-feedback.md"
+          # Which findings the agent saw, for the report's marker: if the run goes idle,
+          # the same findings do not wake later scheduled runs.
+          key="$(bash /opt/nightshift-harness/pr-feedback.sh key 2>/dev/null || true)"
+          if [[ "$key" =~ ^(none|[0-9a-f]{16})$ ]]; then echo "feedback-key=$key" >> "$GITHUB_OUTPUT"; fi
 
       - name: Run agent
         if: steps.gate.outputs.status == 'running' && steps.branch.outputs.conflict != 'true'
@@ -526,6 +537,7 @@ jobs:
       HAS_BUNDLE: ${{ needs.agent.outputs.bundle }}
       AGENT_RESULT: ${{ needs.agent.result }}
       RUN_STARTED: ${{ needs.agent.outputs.started }}
+      RUN_FEEDBACK_KEY: ${{ needs.agent.outputs.feedback-key }}
       RUN_BASE_SHA: ${{ needs.agent.outputs.base-sha }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     # Everything from the agent job is untrusted. This job runs no repository code, and
@@ -790,20 +802,22 @@ jobs:
           {
             echo "@$OWNER Nightshift run finished: $RUN_URL"
             # Trusted, invisible line the next scheduled run's gate reads: when this run
-            # started, which default-branch commit it saw, whether it succeeded, and whether
-            # it went idle.
+            # started, which default-branch commit it saw, whether it succeeded, whether it
+            # went idle, and which PR findings it saw.
             outcome=ok
             if [[ "$AGENT_RESULT" != success || ( "$HAS_BUNDLE" == true && "$PUBLISHED" != true ) ]]; then outcome=failed; fi
             # idle=true when the agent reported that nothing is left it can do without the
             # owner; scheduled runs then pause until something changes.
             idle=false
             if [[ "$outcome" == ok && -e "$out/IDLE" ]]; then idle=true; fi
+            seen=""
+            if [[ "$RUN_FEEDBACK_KEY" =~ ^(none|[0-9a-f]{16})$ ]]; then seen=" feedback=$RUN_FEEDBACK_KEY"; fi
             if [[ "$RUN_STARTED" =~ ^[0-9TZ:-]+$ && "$RUN_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "<!-- nightshift-run: started=$RUN_STARTED base=$RUN_BASE_SHA outcome=$outcome idle=$idle -->"
+              echo "<!-- nightshift-run: started=$RUN_STARTED base=$RUN_BASE_SHA outcome=$outcome idle=$idle$seen -->"
             fi
             echo
             if [[ "$idle" == true ]]; then
-              echo "**Nightshift has nothing left to do without you, so scheduled runs are paused.** They resume when you comment here or on the PR, open or edit an issue, merge, change \`.nightshift/GOALS.md\`, or a review finding or failing check appears on the PR. The agent's reason is below."; echo
+              echo "**Nightshift has nothing left to do without you, so scheduled runs are paused.** They resume when you comment here or on the PR, open or edit an issue, merge, change \`.nightshift/GOALS.md\`, or a new review finding or failing check appears on the PR. The agent's reason is below."; echo
             fi
             if [[ "$AGENT_RESULT" != "success" ]]; then
               echo "**The agent job ended with: $AGENT_RESULT.** See the run for details."; echo

@@ -171,11 +171,15 @@ These are security properties; the port must keep every one.
    and the reply instruction last. Comment ≤ 60,000 characters; questions capped at 5.
 7. **Gate**: `status: paused` stops everything. A scheduled run is skipped when (an open
    `nightshift:needs-you` issue exists, or the last successful report has `idle=true`),
-   `pr-feedback.sh count` is 0, and nothing changed since the last successful run
-   started. The publish job writes a trusted second line in each report,
-   `<!-- nightshift-run: started=<UTC> base=<sha> outcome=ok|failed idle=true|false -->`,
+   `pr-feedback.sh key` is `none` (or, after `idle=true`, equals that report's
+   `feedback`), and nothing changed since the last successful run started. The key is
+   the first 16 hex digits of a SHA-256 over the sorted unresolved thread ids and
+   failing check names, taken by the collect step before the agent runs. The publish
+   job writes a trusted second line in each report, `<!-- nightshift-run:
+   started=<UTC> base=<sha> outcome=ok|failed idle=true|false feedback=none|<key> -->`,
    and the gate reads only that line of the bot's reports starting `@<owner> Nightshift
-   run finished:` (the `idle` field is optional, for reports from before v1.0.6).
+   run finished:` (`idle` and `feedback` are optional, for reports from before v1.0.6
+   and v1.0.7).
    `idle=true` needs `outcome=ok` and the agent's `$NIGHTSHIFT_OUT/IDLE` file; the agent
    text in it appears only as a fenced block. Nothing changed means no owner comment
    (paginated, by `since=started`) on an open `nightshift:needs-you` issue, the run log
