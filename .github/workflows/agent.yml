@@ -191,7 +191,7 @@ jobs:
             if [[ -n "$waiting" ]]; then
               echo "Waiting on the owner's answer to $waiting, with no owner reply and no new $NIGHTSHIFT_BASE commit since the run that started at $last_started"
             else
-              echo "The last run reported the goal finished, and nothing changed since it started at $last_started (no owner comment or issue, no new $NIGHTSHIFT_BASE commit, no PR findings)"
+              echo "The last run reported the goal finished, and nothing changed since it started at $last_started (no owner comment or issue, no new $NIGHTSHIFT_BASE commit, no new PR findings)"
             fi
           }
           # The last successful run's start, so the inbox step can pass on owner notes since.
